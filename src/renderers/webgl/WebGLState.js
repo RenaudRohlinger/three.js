@@ -1137,7 +1137,7 @@ function WebGLState( gl, extensions, capabilities ) {
 
 			gl.uniformBlockBinding( program, blockIndex, uniformsGroup.__bindingPointIndex );
 
-			uboBindings.set( uniformsGroup, blockIndex );
+			uboBindings.set( uniformsGroup, uniformsGroup.__bindingPointIndex );
 
 		}
 
