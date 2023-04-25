@@ -647,8 +647,8 @@ KTX2Loader.BasisWorker = function () {
 
 		let totalByteLength = 0;
 
-		for ( const array of arrays ) {
-
+		for ( let i = 0; i < arrays.length; i ++ ) {
+			const array = arrays[ i ];
 			totalByteLength += array.byteLength;
 
 		}
@@ -657,8 +657,8 @@ KTX2Loader.BasisWorker = function () {
 
 		let byteOffset = 0;
 
-		for ( const array of arrays ) {
-
+		for ( let i = 0; i < arrays.length; i ++ ) {
+			const array = arrays[ i ];
 			result.set( array, byteOffset );
 
 			byteOffset += array.byteLength;
