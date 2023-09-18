@@ -170,6 +170,12 @@ class Backend {
 
 	}
 
+	has( object ) {
+
+		return this.data.has( object );
+
+	}
+
 	delete( object ) {
 
 		this.data.delete( object );

@@ -22,7 +22,8 @@ const gpuShaderStageLib = {
 };
 
 const supports = {
-	instance: true
+	instance: true,
+	storageBuffer: true
 };
 
 const wgslFnOpLib = {
