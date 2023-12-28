@@ -22,7 +22,9 @@ class WebGPURenderer extends Renderer {
 
 		let BackendClass;
 
-		if ( WebGPU.isAvailable() ) {
+		const webgpuAvailable = WebGPU.isAvailable();
+
+		if ( webgpuAvailable ) {
 
 			BackendClass = WebGPUBackend;
 
@@ -39,7 +41,7 @@ class WebGPURenderer extends Renderer {
 		//super( new Proxy( backend, debugHandler ) );
 		super( backend, parameters );
 
-		this.isWebGPURenderer = true;
+		this.isWebGPURenderer = webgpuAvailable;
 
 	}
 
