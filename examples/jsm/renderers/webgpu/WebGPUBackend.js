@@ -36,6 +36,7 @@ class WebGPUBackend extends Backend {
 		this.isWebGPUBackend = true;
 
 		// some parameters require default values other than "undefined"
+		this.parameters.alpha = ( parameters.alpha === undefined ) ? true : parameters.alpha;
 
 		this.parameters.antialias = ( parameters.antialias === true );
 
@@ -114,11 +115,13 @@ class WebGPUBackend extends Backend {
 		this.device = device;
 		this.context = context;
 
+		const alphaMode = parameters.alpha ? 'premultiplied' : 'opaque';
+
 		this.context.configure( {
 			device: this.device,
 			format: GPUTextureFormat.BGRA8Unorm,
 			usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-			alphaMode: 'premultiplied'
+			alphaMode: alphaMode
 		} );
 
 		this.updateSize();
@@ -134,6 +137,12 @@ class WebGPUBackend extends Backend {
 	async getArrayBufferAsync( attribute ) {
 
 		return await this.attributeUtils.getArrayBufferAsync( attribute );
+
+	}
+
+	getContext() {
+
+		return this.context;
 
 	}
 
@@ -1065,16 +1074,6 @@ class WebGPUBackend extends Backend {
 	hasFeature( name ) {
 
 		const adapter = this.adapter || _staticAdapter;
-
-		//
-
-		const features = Object.values( GPUFeatureName );
-
-		if ( features.includes( name ) === false ) {
-
-			throw new Error( 'THREE.WebGPURenderer: Unknown WebGPU GPU feature: ' + name );
-
-		}
 
 		//
 

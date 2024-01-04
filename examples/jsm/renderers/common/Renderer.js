@@ -30,6 +30,7 @@ class Renderer {
 
 		const {
 			logarithmicDepthBuffer = false,
+			alpha = true
 		} = parameters;
 
 		// public
@@ -42,6 +43,8 @@ class Renderer {
 		this.autoClearColor = true;
 		this.autoClearDepth = true;
 		this.autoClearStencil = true;
+
+		this.alpha = alpha;
 
 		this.logarithmicDepthBuffer = logarithmicDepthBuffer;
 
@@ -67,7 +70,6 @@ class Renderer {
 		this._scissor = new Vector4( 0, 0, this._width, this._height );
 		this._scissorTest = false;
 
-		this._properties = null;
 		this._attributes = null;
 		this._geometries = null;
 		this._nodes = null;
@@ -85,7 +87,10 @@ class Renderer {
 		this._opaqueSort = null;
 		this._transparentSort = null;
 
-		this._clearColor = new Color4( 0x000000 );
+
+		const alphaClear = this.alpha === true ? 0 : 1;
+
+		this._clearColor = new Color4( 0, 0, 0, alphaClear );
 		this._clearDepth = 1;
 		this._clearStencil = 0;
 
@@ -298,6 +303,7 @@ class Renderer {
 			renderContext.depthTexture = renderTargetData.depthTexture;
 			renderContext.width = renderTargetData.width;
 			renderContext.height = renderTargetData.height;
+			renderContext.renderTarget = renderTarget;
 
 		} else {
 
@@ -394,7 +400,7 @@ class Renderer {
 
 	getContext() {
 
-		return this._context;
+		return this.backend.getContext();
 
 	}
 
@@ -653,7 +659,6 @@ class Renderer {
 
 		this._animation.dispose();
 		this._objects.dispose();
-		this._properties.dispose();
 		this._pipelines.dispose();
 		this._nodes.dispose();
 		this._bindings.dispose();
@@ -941,13 +946,31 @@ class Renderer {
 
 	renderObject( object, scene, camera, geometry, material, group, lightsNode ) {
 
-		material = scene.overrideMaterial !== null ? scene.overrideMaterial : material;
+		let overridePositionNode;
 
 		//
 
 		object.onBeforeRender( this, scene, camera, geometry, material, group );
 
 		material.onBeforeRender( this, scene, camera, geometry, material, group );
+
+		//
+
+		if ( scene.overrideMaterial !== null ) {
+
+			const overrideMaterial = scene.overrideMaterial;
+
+			if ( material.positionNode && material.positionNode.isNode ) {
+
+				overridePositionNode = overrideMaterial.positionNode;
+
+				overrideMaterial.positionNode = material.positionNode;
+
+			}
+
+			material = overrideMaterial;
+
+		}
 
 		//
 
@@ -964,6 +987,14 @@ class Renderer {
 		} else {
 
 			this._renderObjectDirect( object, material, scene, camera, lightsNode );
+
+		}
+
+		//
+
+		if ( overridePositionNode !== undefined ) {
+
+			scene.overrideMaterial.positionNode = overridePositionNode;
 
 		}
 

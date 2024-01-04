@@ -126,11 +126,11 @@ class KTX2Loader extends Loader {
 
 			this.workerConfig = {
 				astcSupported: renderer.hasFeature( 'texture-compression-astc' ),
-				etc1Supported: false,
+				etc1Supported: renderer.hasFeature( 'texture-compression-etc1' ),
 				etc2Supported: renderer.hasFeature( 'texture-compression-etc2' ),
 				dxtSupported: renderer.hasFeature( 'texture-compression-bc' ),
-				bptcSupported: false,
-				pvrtcSupported: false
+				bptcSupported: renderer.hasFeature( 'texture-compression-bptc' ),
+				pvrtcSupported: renderer.hasFeature( 'texture-compression-pvrtc' )
 			};
 
 		} else {
@@ -865,8 +865,8 @@ async function createRawTexture( container ) {
 	if ( UNCOMPRESSED_FORMATS.has( FORMAT_MAP[ vkFormat ] ) ) {
 
 		texture = container.pixelDepth === 0
-		? new DataTexture( mipmaps[ 0 ].data, container.pixelWidth, container.pixelHeight )
-		: new Data3DTexture( mipmaps[ 0 ].data, container.pixelWidth, container.pixelHeight, container.pixelDepth );
+			? new DataTexture( mipmaps[ 0 ].data, container.pixelWidth, container.pixelHeight )
+			: new Data3DTexture( mipmaps[ 0 ].data, container.pixelWidth, container.pixelHeight, container.pixelDepth );
 
 	} else {
 
