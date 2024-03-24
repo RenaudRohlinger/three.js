@@ -8,9 +8,9 @@ import { normalLocal } from './NormalNode.js';
 import { textureLoad } from './TextureNode.js';
 import { instanceIndex, vertexIndex } from '../core/IndexNode.js';
 import { ivec2, int } from '../shadernode/ShaderNode.js';
-import { DataArrayTexture, Vector2, Vector4, FloatType, RedFormat } from 'three';
 import { loop } from '../utils/LoopNode.js';
-import { all } from '../Nodes.js';
+
+import { DataArrayTexture, Vector2, Vector4, FloatType, RedFormat } from 'three';
 
 const morphTextures = new WeakMap();
 const morphVec4 = new Vector4();
