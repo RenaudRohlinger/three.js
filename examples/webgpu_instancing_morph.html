@@ -12,7 +12,9 @@
 				"imports": {
 					"three": "../build/three.module.js",
 					"three/addons/": "./jsm/",
-					"three/nodes": "./jsm/nodes/Nodes.js"
+					"three/nodes": "./jsm/nodes/Nodes.js",
+					"stats-gl": "https://www.unpkg.com/stats-gl@2.2.7/dist/main.js"
+
 				}
 			}
 		</script>
@@ -22,23 +24,16 @@
 			import * as THREE from 'three';
 
 			import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+			import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+			import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
-			import Stats from 'three/addons/libs/stats.module.js';
+			import Stats from 'stats-gl';
 
 			import WebGPURenderer from 'three/addons/renderers/webgpu/WebGPURenderer.js';
-			import { MeshStandardNodeMaterial } from 'three/nodes';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
 
-			let camera, scene, renderer, stats, mesh, mixer, dummy;
-
-			const offset = 5000;
-
-			const timeOffsets = new Float32Array( 1024 );
-
-			for ( let i = 0; i < 1024; i ++ ) {
-
-				timeOffsets[ i ] = Math.random() * 3;
-
-			}
+			let head;
+			let camera, scene, renderer, stats, mesh, mixer, duration;
 
 			const clock = new THREE.Clock( true );
 
@@ -46,7 +41,8 @@
 
 			function init() {
 
-				camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 100, 10000 );
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 500 );
+				camera.position.set( 0, 0, 0 );
 
 				scene = new THREE.Scene();
 
@@ -57,9 +53,30 @@
 
 				//
 
-				stats = new Stats();
+				stats = new Stats( {
+					logsPerSecond: 0.25,
+					samplesLog: 1000,
+					samplesGraph: 10,
+					precision: 3,
+					horizontal: false
+				} );
 				document.body.appendChild( stats.dom );
 
+
+
+				// renderer
+
+				renderer = new WebGPURenderer( { antialias: true, forceWebGL: false } );
+
+
+				renderer.setAnimationLoop( animate );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				document.body.appendChild( renderer.domElement );
+
+				stats.init( renderer );
+
+			
 				const light = new THREE.DirectionalLight( 0xffffff, 1 );
 
 				light.position.set( 200, 1000, 50 );
@@ -95,56 +112,78 @@
 
 				scene.add( ground );
 
-				const loader = new GLTFLoader();
+				const ktx2Loader = new KTX2Loader()
+					.setTranscoderPath( 'jsm/libs/basis/' )
+					.detectSupport( renderer );
 
-				loader.load( 'models/gltf/Horse.glb', function ( glb ) {
+				new GLTFLoader()
+					.setKTX2Loader( ktx2Loader )
+					.setMeshoptDecoder( MeshoptDecoder )
+					.load( 'models/gltf/facecap.glb', ( gltf ) => {
 
-					dummy = glb.scene.children[ 0 ];
+						const orig = gltf.scene.children[ 0 ];
 
-					mesh = new THREE.InstancedMesh( dummy.geometry, new MeshStandardNodeMaterial( {
-						flatShading: true,
-					} ), 1024 );
+						mixer = new THREE.AnimationMixer( orig );
 
-					mesh.castShadow = true;
+						mixer.clipAction( gltf.animations[ 0 ] ).play();
 
-					for ( let x = 0, i = 0; x < 32; x ++ ) {
-
-						for ( let y = 0; y < 32; y ++ ) {
-
-							dummy.position.set( offset - 300 * x + 200 * Math.random(), 0, offset - 300 * y );
-
-							dummy.updateMatrix();
-
-							mesh.setMatrixAt( i, dummy.matrix );
-
-							mesh.setColorAt( i, new THREE.Color( `hsl(${Math.random() * 360}, 50%, 66%)` ) );
-
-							i ++;
+						duration = gltf.animations[ 0 ].duration;
 			
+						// GUI
+
+						head = orig.getObjectByName( 'mesh_2' );
+
+						mesh = new THREE.InstancedMesh( head.geometry, head.material, 128 );
+
+						mesh.setMatrixAt( 0, head.matrix );
+
+						mesh.instanceMatrix.setUsage( THREE.DynamicDrawUsage );
+
+						mesh.setMorphAt( 0, head );
+
+						const gridParams = {
+							width: 3,
+							height: 2
+						};
+
+						function updateGrid() {
+
+							mesh.count = gridParams.width * gridParams.height;
+
+							const w = gridParams.width;
+							const h = gridParams.height;
+
+							for ( let i = 0; i < h; i ++ ) {
+
+								for ( let j = 0; j < w; j ++ ) {
+
+									head.position.set( j - w / 2, i - h / 2 + 1, - Math.max( w, h ) - 2 ).multiplyScalar( 25 );
+
+									head.rotation.x = Math.PI / 2;
+
+									head.updateMatrix();
+
+									mesh.setMatrixAt( j + w * i, head.matrix );
+
+								}
+
+								mesh.instanceMatrix.needsUpdate = true;
+
+							}
+
 						}
-
 			
-					}
+						scene.add( mesh );
 
-					scene.add( mesh );
+						const gui = new GUI();
 
-					mixer = new THREE.AnimationMixer( glb.scene );
+						gui.add( gridParams, 'width', 2, 16 ).name( 'Grid width' ).step( 1 ).onChange( updateGrid );
+						gui.add( gridParams, 'height', 2, 8 ).name( 'Grid height' ).step( 1 ).onChange( updateGrid );
 
-					const action = mixer.clipAction( glb.animations[ 0 ] );
+						updateGrid();
 
-					action.play();
-			
-				} );
+					} );
 
-
-				// renderer
-
-				renderer = new WebGPURenderer( { antialias: true } );
-
-				renderer.setAnimationLoop( animate );
-				renderer.setPixelRatio( window.devicePixelRatio );
-				renderer.setSize( window.innerWidth, window.innerHeight );
-				document.body.appendChild( renderer.domElement );
 
 				window.addEventListener( 'resize', onWindowResize );
 
@@ -161,21 +200,17 @@
 
 			//
 
-			function animate() {
+			async function animate() {
 
 				const time = clock.getElapsedTime();
 
-				const r = 3000;
-				camera.position.set( Math.sin( time / 10 ) * r, 1500 + 1000 * Math.cos( time / 5 ), Math.cos( time / 10 ) * r );
-				camera.lookAt( 0, 0, 0 );
+				if ( mixer ) {
 
-				if ( mesh ) {
+					for ( let i = 0; i < mesh.count; i ++ ) {
 
-					for ( let i = 0; i < 1024; i ++ ) {
+						mixer.setTime( time + i * duration / mesh.count );
 
-						mixer.setTime( time + timeOffsets[ i ] );
-
-						mesh.setMorphAt( i, dummy );
+						mesh.setMorphAt( i, head );
 
 					}
 
@@ -183,7 +218,7 @@
 
 				}
 
-				renderer.render( scene, camera );
+				await renderer.renderAsync( scene, camera );
 
 				stats.update();
 
