@@ -130,10 +130,25 @@ class Bindings extends DataMap {
 
 				const updated = binding.update();
 
+
 				if ( updated ) {
 
 					this.textures.updateTexture( binding.texture );
 
+					needsBindingsUpdate = true;
+
+				}
+
+				const textureData = backend.get( binding.texture );
+
+				const isTextureGPUNotAvailable = textureData.texture === undefined && textureData.externalTexture === undefined;
+
+				if ( isTextureGPUNotAvailable ) {
+
+					// TODO: Remove this once we found why updated === false doesn't generate a texture in the WebGPU backend
+					console.error( 'WebGPUBindingUtils.createBindGroup: was updated binding:', binding, updated, binding.texture, binding.textureNode.value );
+
+					this.textures.updateTexture( binding.texture );
 					needsBindingsUpdate = true;
 
 				}

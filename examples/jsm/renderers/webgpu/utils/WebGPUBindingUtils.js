@@ -95,15 +95,6 @@ class WebGPUBindingUtils {
 
 				}
 
-				const textureData = backend.get( binding.texture );
-
-				if ( textureData.externalTexture === undefined && textureData.texture === undefined ) {
-
-					console.error( 'WebGPUBindingUtils.createBindingsLayout: Texture bound is undefined', binding );
-					continue;
-
-				}
-
 				if ( binding.isSampledCubeTexture ) {
 
 					texture.viewDimension = GPUTextureViewDimension.Cube;
@@ -219,13 +210,6 @@ class WebGPUBindingUtils {
 
 				let dimensionViewGPU;
 
-				if ( textureData.externalTexture === undefined && textureData.texture === undefined ) {
-
-					console.error( 'WebGPUBindingUtils.createBindGroup: Texture bound is undefined', binding );
-					continue;
-
-				}
-
 				if ( binding.isSampledCubeTexture ) {
 
 					dimensionViewGPU = GPUTextureViewDimension.Cube;
@@ -255,7 +239,6 @@ class WebGPUBindingUtils {
 				}
 
 				entriesGPU.push( { binding: bindingPoint, resource: resourceGPU } );
-
 
 			}
 
