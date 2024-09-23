@@ -406,11 +406,15 @@ class AnalyticLightNode extends LightingNode {
 		const currentRenderTarget = renderer.getRenderTarget();
 		const currentRenderObjectFunction = renderer.getRenderObjectFunction();
 
-		renderer.setRenderObjectFunction( ( object, ...params ) => {
+		renderer.setRenderObjectFunction( ( object, scene, camera, geometry, material, group, lightsNode ) => {
 
 			if ( object.castShadow === true || ( object.receiveShadow && shadowType === VSMShadowMap ) ) {
 
-				renderer.renderObject( object, ...params );
+				object.onBeforeShadow( renderer, object, camera, light.shadow.camera, geometry, material, group );
+
+				renderer.renderObject( object, scene, camera, geometry, material, group, lightsNode );
+
+				object.onAfterShadow( renderer, object, camera, light.shadow.camera, geometry, material, group );
 
 			}
 

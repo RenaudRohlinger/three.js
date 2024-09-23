@@ -1439,7 +1439,12 @@ class Renderer {
 
 						this.backend.updateViewport( this._currentRenderContext );
 
+
+						object.onBeforeRender( this, scene, camera2, geometry, material, group );
+
 						this._currentRenderObjectFunction( object, scene, camera2, geometry, material, group, lightsNode );
+
+						object.onAfterRender( this, scene, camera2, geometry, material, group );
 
 					}
 
@@ -1447,7 +1452,11 @@ class Renderer {
 
 			} else {
 
+				object.onBeforeRender( this, scene, camera, geometry, material, group );
+
 				this._currentRenderObjectFunction( object, scene, camera, geometry, material, group, lightsNode );
+
+				object.onAfterRender( this, scene, camera, geometry, material, group );
 
 			}
 
