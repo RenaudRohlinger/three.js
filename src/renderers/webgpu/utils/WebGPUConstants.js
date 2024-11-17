@@ -329,5 +329,6 @@ export const GPUFeatureName = {
 	Float32Filterable: 'float32-filterable',
 	ClipDistances: 'clip-distances',
 	DualSourceBlending: 'dual-source-blending',
-	Subgroups: 'subgroups'
+	Subgroups: 'subgroups',
+	MultiDrawIndirect: 'chromium-experimental-multi-draw-indirect',
 };

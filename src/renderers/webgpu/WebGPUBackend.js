@@ -971,22 +971,38 @@ class WebGPUBackend extends Backend {
 
 		if ( object.isBatchedMesh === true ) {
 
-			const starts = object._multiDrawStarts;
-			const counts = object._multiDrawCounts;
-			const drawCount = object._multiDrawCount;
-			const drawInstances = object._multiDrawInstances;
 
-			const bytesPerElement = hasIndex ? index.array.BYTES_PER_ELEMENT : 1;
+			if ( object.isBatchedMesh === true ) {
 
-			for ( let i = 0; i < drawCount; i ++ ) {
 
-				const count = drawInstances ? drawInstances[ i ] : 1;
-				const firstInstance = count > 1 ? 0 : i;
-
-				passEncoderGPU.drawIndexed( counts[ i ], count, starts[ i ] / bytesPerElement, 0, firstInstance );
-
-			}
-
+				const indirect = renderObject.getIndirect();
+	
+				if ( indirect !== null ) {
+	
+					const buffer = this.get( indirect ).buffer;
+	
+					passEncoderGPU.multiDrawIndirect( buffer, 0, 0 );
+	
+				} else {
+	
+					const starts = object._multiDrawStarts;
+					const counts = object._multiDrawCounts;
+					const drawCount = object._multiDrawCount;
+					const drawInstances = object._multiDrawInstances;
+	
+					const bytesPerElement = hasIndex ? index.array.BYTES_PER_ELEMENT : 1;
+	
+					for ( let i = 0; i < drawCount; i ++ ) {
+	
+						const count = drawInstances ? drawInstances[ i ] : 1;
+						const firstInstance = count > 1 ? 0 : i;
+	
+						passEncoderGPU.drawIndexed( counts[ i ], count, starts[ i ] / bytesPerElement, 0, firstInstance );
+	
+					}
+	
+				}
+	
 		} else if ( hasIndex === true ) {
 
 			const { vertexCount: indexCount, instanceCount, firstVertex: firstIndex } = drawParams;

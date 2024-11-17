@@ -7,6 +7,8 @@ import { textureSize } from './TextureSizeNode.js';
 import { tangentLocal } from './Tangent.js';
 import { instanceIndex, drawIndex } from '../core/IndexNode.js';
 import { varyingProperty } from '../core/PropertyNode.js';
+import { NodeUpdateType } from '../Nodes.js';
+import IndirectStorageBufferAttribute from '../../renderers/common/IndirectStorageBufferAttribute.js';
 
 class BatchNode extends Node {
 
@@ -24,6 +26,8 @@ class BatchNode extends Node {
 
 
 		this.batchingIdNode = null;
+		this._indirectAttribute = null;
+		this.updateBeforeType = NodeUpdateType.FRAME;
 
 	}
 
@@ -44,6 +48,32 @@ class BatchNode extends Node {
 			}
 
 		}
+
+
+		const object = this.batchMesh;
+		const geometry = object.geometry;
+
+		const uint32 = new Uint32Array( 5 * object._multiDrawCount );
+		const starts = object._multiDrawStarts;
+		const counts = object._multiDrawCounts;
+		const drawCount = object._multiDrawCount;
+		const drawInstances = object._multiDrawInstances;
+
+		for ( let i = 0; i < drawCount; i ++ ) {
+
+			const count = drawInstances ? drawInstances[ i ] : 1;
+
+			uint32[ i * 5 ] = counts[ i ];
+			uint32[ i * 5 + 1 ] = count;
+			uint32[ i * 5 + 2 ] = starts[ i ];
+			uint32[ i * 5 + 3 ] = 0;
+			uint32[ i * 5 + 4 ] = drawInstances ? 0 : i;
+
+		}
+
+		const indirectAttribute = new IndirectStorageBufferAttribute( uint32, 5 );
+		geometry.setIndirect( indirectAttribute );
+		this._indirectAttribute = indirectAttribute;
 
 		const getIndirectIndex = Fn( ( [ id ] ) => {
 
@@ -118,6 +148,36 @@ class BatchNode extends Node {
 			tangentLocal.mulAssign( bm );
 
 		}
+
+	}
+
+	updateBefore( frame ) {
+
+		// WIP
+		// const object = this.batchMesh;
+
+		// const uint32 = new Uint32Array( 5 * object._multiDrawCount );
+		// const starts = object._multiDrawStarts;
+		// const counts = object._multiDrawCounts;
+		// const drawCount = object._multiDrawCount;
+		// const drawInstances = object._multiDrawInstances;
+
+		// for ( let i = 0; i < drawCount; i ++ ) {
+
+		// 	const count = drawInstances ? drawInstances[ i ] : 1;
+
+		// 	uint32[ i * 5 ] = counts[ i ];
+		// 	uint32[ i * 5 + 1 ] = count;
+		// 	uint32[ i * 5 + 2 ] = starts[ i ];
+		// 	uint32[ i * 5 + 3 ] = 0;
+		// 	uint32[ i * 5 + 4 ] = drawInstances ? 0 : i;
+
+		// }
+
+
+		// const indirect = this._indirectAttribute;
+		// indirect.value = uint32;
+		// indirect.needsUpdate = true;
 
 	}
 
