@@ -57,7 +57,17 @@ class TextureSizeNode extends Node {
 		const textureProperty = this.textureNode.build( builder, 'property' );
 		const level = this.levelNode === null ? '0' : this.levelNode.build( builder, 'int' );
 
-		return builder.format( `${ builder.getMethod( 'textureDimensions' ) }( ${ textureProperty }, ${ level } )`, this.getNodeType( builder ), output );
+		let value = `${ textureProperty }, ${ level }`;
+
+		const texture = this.textureNode.value;
+
+		if ( texture.isStorageTexture || texture.isVideoTexture ) {
+
+			value = textureProperty;
+
+		}
+
+		return builder.format( `${ builder.getMethod( 'textureDimensions' ) }( ${value} )`, this.getNodeType( builder ), output );
 
 	}
 
