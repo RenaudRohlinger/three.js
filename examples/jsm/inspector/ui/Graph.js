@@ -64,12 +64,14 @@ export class Graph {
 		for ( const id in this.lines ) {
 
 			const line = this.lines[ id ];
+			const limit = Number.isFinite( this.limit ) && this.limit > 0 ? this.limit : 1;
 
 			let pathString = `M 0,${ svgHeight }`;
 			for ( let i = 0; i < line.points.length; i ++ ) {
 
 				const x = i * pointStep;
-				const y = svgHeight - ( line.points[ i ] / this.limit ) * svgHeight;
+				const value = Number.isFinite( line.points[ i ] ) ? line.points[ i ] : 0;
+				const y = svgHeight - ( value / limit ) * svgHeight;
 				pathString += ` L ${ x },${ y }`;
 
 			}

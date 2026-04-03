@@ -413,6 +413,7 @@
 		"webgpu_pmrem_scene",
 		"webgpu_pmrem_test",
 		"webgpu_portal",
+		"webgpu_worker_offscreencanvas",
 		"webgpu_postprocessing_3dlut",
 		"webgpu_postprocessing_afterimage",
 		"webgpu_postprocessing_anamorphic",

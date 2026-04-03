@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - worker - offscreen canvas inspector</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<link rel="stylesheet" href="main.css">
+		<style>
+			body {
+				margin: 0;
+				background: #0c1117;
+				color: #d7dde7;
+				overflow: hidden;
+			}
+
+			a {
+				color: #8ac6ff;
+			}
+
+			#canvas {
+				display: block;
+				width: 100vw;
+				height: 100vh;
+			}
+
+			#info {
+				max-width: 520px;
+			}
+
+			#error {
+				color: #ff8c8c;
+				display: none;
+				margin-top: 8px;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - WebGPU worker + OffscreenCanvas inspector bridge<br>
+			The renderer runs in a worker. The inspector UI stays on the main thread and connects through a <code>MessagePort</code>.
+			<div id="error"></div>
+		</div>
+
+		<canvas id="canvas"></canvas>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import { WorkerInspector } from 'three/addons/inspector/worker/WorkerInspector.js';
+
+			const canvas = document.getElementById( 'canvas' );
+			const errorElement = document.getElementById( 'error' );
+
+			if ( 'gpu' in navigator === false || 'transferControlToOffscreen' in canvas === false ) {
+
+				errorElement.style.display = 'block';
+				errorElement.innerHTML = 'This example requires WebGPU and OffscreenCanvas worker support.';
+				throw new Error( 'WebGPU or OffscreenCanvas worker support is unavailable.' );
+
+			}
+
+			const inspector = new WorkerInspector();
+			inspector.connect( createWorker() );
+			document.body.appendChild( inspector.domElement );
+
+			function createWorker() {
+
+				const worker = new Worker( 'jsm/offscreen/webgpu_inspector_offscreen.js', { type: 'module' } );
+				const channel = new MessageChannel();
+				const offscreen = canvas.transferControlToOffscreen();
+
+				worker.postMessage( {
+					type: 'init',
+					drawingSurface: offscreen,
+					inspectorPort: channel.port2,
+					width: canvas.clientWidth,
+					height: canvas.clientHeight,
+					pixelRatio: window.devicePixelRatio
+				}, [ offscreen, channel.port2 ] );
+
+				const resize = () => {
+
+					worker.postMessage( {
+						type: 'resize',
+						width: canvas.clientWidth,
+						height: canvas.clientHeight,
+						pixelRatio: window.devicePixelRatio
+					} );
+
+				};
+
+				window.addEventListener( 'resize', resize );
+
+				worker.addEventListener( 'error', ( event ) => {
+
+					errorElement.style.display = 'block';
+					errorElement.textContent = event.message;
+
+				} );
+
+				return channel.port1;
+
+			}
+
+		</script>
+	</body>
+</html>

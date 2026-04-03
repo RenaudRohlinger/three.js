@@ -23,37 +23,32 @@ class Inspector extends RendererInspector {
 		const profiler = new Profiler( this );
 		profiler.addEventListener( 'resize', ( e ) => this.dispatchEvent( e ) );
 
-		const parameters = new Parameters( {
-			builtin: true,
-			icon: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 6m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M4 6l8 0" /><path d="M16 6l4 0" /><path d="M8 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M4 12l2 0" /><path d="M10 12l10 0" /><path d="M17 18m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M4 18l11 0" /><path d="M19 18l1 0" /></svg>'
-		} );
-		parameters.hide();
-		profiler.addTab( parameters );
+		const tabs = this._createTabs();
+		const parameters = tabs.parameters || null;
+		const viewer = tabs.viewer || null;
+		const performance = tabs.performance || null;
+		const memory = tabs.memory || null;
+		const timeline = tabs.timeline || null;
+		const consoleTab = tabs.consoleTab || null;
+		const settings = tabs.settings || null;
 
-		const viewer = new Viewer();
-		viewer.hide();
-		profiler.addTab( viewer );
+		for ( const tab of [ parameters, viewer, performance, memory, timeline, consoleTab, settings ] ) {
 
-		const performance = new Performance();
-		profiler.addTab( performance );
+			if ( tab ) profiler.addTab( tab );
 
-		const memory = new Memory();
-		profiler.addTab( memory );
-
-		const timeline = new Timeline();
-		profiler.addTab( timeline );
-
-		const consoleTab = new Console();
-		profiler.addTab( consoleTab );
-
-		const settings = new Settings();
-		profiler.addTab( settings );
+		}
 
 		profiler.loadLayout();
 
 		if ( ! profiler.activeTabId ) {
 
-			profiler.setActiveTab( performance.id );
+			const defaultTab = performance || memory || timeline || consoleTab || parameters || viewer || settings;
+
+			if ( defaultTab ) {
+
+				profiler.setActiveTab( defaultTab.id );
+
+			}
 
 		}
 
@@ -80,6 +75,29 @@ class Inspector extends RendererInspector {
 				duration: .02,
 				time: 0
 			}
+		};
+
+	}
+
+	_createTabs() {
+
+		const parameters = new Parameters( {
+			builtin: true,
+			icon: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path stroke="none" d="M0 0h24v24H0z" fill="none"/><path d="M14 6m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M4 6l8 0" /><path d="M16 6l4 0" /><path d="M8 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M4 12l2 0" /><path d="M10 12l10 0" /><path d="M17 18m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M4 18l11 0" /><path d="M19 18l1 0" /></svg>'
+		} );
+		parameters.hide();
+
+		const viewer = new Viewer();
+		viewer.hide();
+
+		return {
+			parameters,
+			viewer,
+			performance: new Performance(),
+			memory: new Memory(),
+			timeline: new Timeline(),
+			consoleTab: new Console(),
+			settings: new Settings()
 		};
 
 	}
