@@ -16,6 +16,7 @@ import QuadMesh from './QuadMesh.js';
 import RenderBundles from './RenderBundles.js';
 import NodeLibrary from './nodes/NodeLibrary.js';
 import Lighting from './Lighting.js';
+import WorkScheduler from './WorkScheduler.js';
 import XRManager from './XRManager.js';
 import InspectorBase from './InspectorBase.js';
 import CanvasTarget from './CanvasTarget.js';
@@ -36,7 +37,7 @@ import { float, vec3, vec4, Fn } from '../../nodes/tsl/TSLCore.js';
 import { reference } from '../../nodes/accessors/ReferenceNode.js';
 import { highpModelNormalViewMatrix, highpModelViewMatrix } from '../../nodes/accessors/ModelNode.js';
 import { context } from '../../nodes/core/ContextNode.js';
-import { error, warn, warnOnce, yieldToMain } from '../../utils.js';
+import { error, warn, warnOnce } from '../../utils.js';
 
 const _scene = /*@__PURE__*/ new Scene();
 const _drawingBufferSize = /*@__PURE__*/ new Vector2();
@@ -70,6 +71,12 @@ class Renderer {
 	 * @property {number} [outputBufferType=HalfFloatType] - Defines the type of output buffers. The default `HalfFloatType` is recommend for best
 	 * quality. To save memory and bandwidth, `UnsignedByteType` might be used. This will reduce rendering quality though.
 	 * @property {boolean} [multiview=false] - If set to `true`, the renderer will use multiview during WebXR rendering if supported.
+	 * @property {boolean} [asyncCompilation=false] - If set to `true`, the renderer never performs unbounded
+	 * node building or synchronous pipeline creation on the render path. New and changed materials are
+	 * prepared in the background and appear when ready: new objects are skipped until their first
+	 * generation is compiled (like textures, which render as placeholders until uploaded), and changed
+	 * objects keep rendering their last compiled state until the replacement is promoted atomically
+	 * between frames. Use {@link Renderer#compileAsync} to prewarm materials when pop-in is unacceptable.
 	 */
 
 	/**
@@ -102,7 +109,8 @@ class Renderer {
 			samples = 0,
 			getFallback = null,
 			outputBufferType = HalfFloatType,
-			multiview = false
+			multiview = false,
+			asyncCompilation = false
 		} = parameters;
 
 		/**
@@ -653,13 +661,47 @@ class Renderer {
 		this._initPromise = null;
 
 		/**
-		 * An array of compilation promises which are used in `compileAsync()`.
+		 * Whether async compilation mode is enabled. Fixed for the renderer's
+		 * lifetime.
 		 *
 		 * @private
-		 * @type {?Array<Promise>}
+		 * @type {boolean}
+		 * @readonly
+		 */
+		this._asyncCompilation = asyncCompilation === true;
+
+		/**
+		 * The work scheduler coordinating background compilation, pipeline
+		 * creation and safe-point promotion. Created in `init()`.
+		 *
+		 * @private
+		 * @type {?WorkScheduler}
 		 * @default null
 		 */
-		this._compilationPromises = null;
+		this._scheduler = null;
+
+		/**
+		 * Applications that render on demand can set this callback so a
+		 * finished background compilation can request the frame that displays
+		 * it. It is invoked at most once per batch of completed work, from
+		 * the scheduler's own service callback — never synchronously from a
+		 * promise resolution. It is a notification; it is not required for
+		 * progress.
+		 *
+		 * @type {?Function}
+		 * @default null
+		 */
+		this.onBackgroundWorkReady = null;
+
+		/**
+		 * An array collecting the generation tasks discovered by the current
+		 * `compileAsync()` traversal.
+		 *
+		 * @private
+		 * @type {?Array<WorkTask>}
+		 * @default null
+		 */
+		this._compilationTasks = null;
 
 		/**
 		 * When an override material is in use, this property points to the current
@@ -820,6 +862,9 @@ class Renderer {
 			this._bundles = new RenderBundles();
 			this._renderContexts = new RenderContexts( this );
 
+			this._scheduler = new WorkScheduler( this );
+			this._scheduler.attachInfo( this.info.asyncCompilation );
+
 			//
 
 			this._animation.start();
@@ -895,7 +940,7 @@ class Renderer {
 		const previousRenderContext = this._currentRenderContext;
 		const previousRenderObjectFunction = this._currentRenderObjectFunction;
 		const previousHandleObjectFunction = this._handleObjectFunction;
-		const previousCompilationPromises = this._compilationPromises;
+		const previousCompilationTasks = this._compilationTasks;
 
 		//
 
@@ -911,14 +956,14 @@ class Renderer {
 		const renderContext = this._renderContexts.get( renderTarget, this._mrt );
 		const activeMipmapLevel = this._activeMipmapLevel;
 
-		const compilationPromises = [];
+		const compilationTasks = [];
 
 		this._currentRenderContext = renderContext;
 		this._currentRenderObjectFunction = this.renderObject;
 
 		this._handleObjectFunction = this._createObjectPipeline;
 
-		this._compilationPromises = compilationPromises;
+		this._compilationTasks = compilationTasks;
 
 		nodeFrame.renderId ++;
 
@@ -1008,7 +1053,7 @@ class Renderer {
 
 		}
 
-		// process render lists - _createObjectPipeline will push async promises to _compilationPromises
+		// process render lists - _createObjectPipeline requests background generations
 
 		const opaqueObjects = renderList.opaque;
 		const transparentObjects = renderList.transparent;
@@ -1025,39 +1070,20 @@ class Renderer {
 		this._currentRenderContext = previousRenderContext;
 		this._currentRenderObjectFunction = previousRenderObjectFunction;
 		this._handleObjectFunction = previousHandleObjectFunction;
-		this._compilationPromises = previousCompilationPromises;
+		this._compilationTasks = previousCompilationTasks;
 
-		// Process compilation work items sequentially to avoid freezing
-		// Yields between objects to keep animation smooth
+		// snapshot semantics: resolve when the generations discovered at call
+		// time are ready, failed or stale — later mutations don't extend the
+		// promise. Resolution does not force promotion; promotable
+		// generations are applied at the next top-level render safe point.
 
-		for ( const item of compilationPromises ) {
+		if ( compilationTasks.length > 0 ) {
 
-			const renderObject = this._objects.get( item.object, item.material, item.scene, item.camera, item.lightsNode, item.renderContext, item.clippingContext, item.passId );
-			renderObject.drawRange = item.object.geometry.drawRange;
-			renderObject.group = item.group;
+			await Promise.all( compilationTasks.map( ( task ) => {
 
-			this._geometries.updateForRender( renderObject );
+				return new Promise( ( resolve ) => task.onSettled( resolve ) );
 
-			// Use async node building to yield to main thread
-			await this._nodes.getForRenderAsync( renderObject );
-
-			this._nodes.updateBefore( renderObject );
-			this._nodes.updateForRender( renderObject );
-			this._bindings.updateForRender( renderObject );
-
-			// Wait for pipeline creation
-			const pipelinePromises = [];
-			this._pipelines.getForRender( renderObject, pipelinePromises );
-			if ( pipelinePromises.length > 0 ) {
-
-				await Promise.all( pipelinePromises );
-
-			}
-
-			this._nodes.updateAfter( renderObject );
-
-			// Yield between objects to allow animation frames
-			await yieldToMain();
+			} ) );
 
 		}
 
@@ -1233,6 +1259,15 @@ class Renderer {
 
 		this._isDeviceLost = true;
 
+		// settle all background work into a defined dead state: cancel all
+		// tasks, settle all waiters, clear queued promotions
+
+		if ( this._scheduler !== null ) {
+
+			this._scheduler.settleAll( 'cancelled' );
+
+		}
+
 	}
 
 	/**
@@ -1357,6 +1392,15 @@ class Renderer {
 		}
 
 		this._renderScene( scene, camera );
+
+		// service the work scheduler once per top-level frame so background
+		// compilation progresses even without idle time (e.g. in XR sessions)
+
+		if ( this._scheduler !== null && this._callDepth === - 1 ) {
+
+			this._scheduler.update();
+
+		}
 
 	}
 
@@ -1509,6 +1553,16 @@ class Renderer {
 
 		if ( this._isDeviceLost === true ) return;
 
+		// safe point: apply queued generation promotions at the entry of a
+		// top-level render call, before render-list construction, while no
+		// pass or encoder is active — nested renders never promote
+
+		if ( this._scheduler !== null && this._callDepth === - 1 ) {
+
+			this._scheduler.applyPromotions();
+
+		}
+
 		//
 
 		const frameBufferTarget = useFrameBufferTarget ? this._getFrameBufferTarget() : null;
@@ -1579,7 +1633,7 @@ class Renderer {
 
 		this._currentRenderContext = renderContext;
 		this._currentRenderObjectFunction = this._renderObjectFunction || this.renderObject;
-		this._handleObjectFunction = this._renderObjectDirect;
+		this._handleObjectFunction = this._asyncCompilation === true ? this._renderObjectAsync : this._renderObjectDirect;
 
 		//
 
@@ -2522,6 +2576,8 @@ class Renderer {
 			this.info.dispose();
 			this.backend.dispose();
 
+			this._scheduler.dispose();
+
 			this._animation.dispose();
 			this._objects.dispose();
 			this._geometries.dispose();
@@ -3100,7 +3156,9 @@ class Renderer {
 
 					if ( material.visible ) {
 
-						renderList.push( object, geometry, material, groupOrder, _vector4.z, null, clippingContext );
+						const classification = this._asyncCompilation === true ? this._objects.getClassification( material ) : null;
+
+						renderList.push( object, geometry, material, groupOrder, _vector4.z, null, clippingContext, classification );
 
 					}
 
@@ -3140,7 +3198,9 @@ class Renderer {
 
 							if ( groupMaterial && groupMaterial.visible ) {
 
-								renderList.push( object, geometry, groupMaterial, groupOrder, _vector4.z, group, clippingContext );
+								const classification = this._asyncCompilation === true ? this._objects.getClassification( groupMaterial ) : null;
+
+								renderList.push( object, geometry, groupMaterial, groupOrder, _vector4.z, group, clippingContext, classification );
 
 							}
 
@@ -3148,7 +3208,9 @@ class Renderer {
 
 					} else if ( material.visible ) {
 
-						renderList.push( object, geometry, material, groupOrder, _vector4.z, null, clippingContext );
+						const classification = this._asyncCompilation === true ? this._objects.getClassification( material ) : null;
+
+						renderList.push( object, geometry, material, groupOrder, _vector4.z, null, clippingContext, classification );
 
 					}
 
@@ -3673,6 +3735,80 @@ class Renderer {
 	}
 
 	/**
+	 * The `_handleObjectFunction` implementation of async compilation mode.
+	 *
+	 * Unchanged objects draw their active generation with zero new work.
+	 * Changed objects request a background generation and keep drawing their
+	 * active one. New objects request a background generation and are
+	 * skipped until their first generation promotes. The render loop never
+	 * performs unbounded node building or synchronous pipeline creation.
+	 *
+	 * @private
+	 * @param {Object3D} object - The 3D object.
+	 * @param {Material} material - The object's material.
+	 * @param {Scene} scene - The scene the 3D object belongs to.
+	 * @param {Camera} camera - The camera the object should be rendered with.
+	 * @param {LightsNode} lightsNode - The current lights node.
+	 * @param {?{start: number, count: number}} group - Only relevant for objects using multiple materials. This represents a group entry from the respective `BufferGeometry`.
+	 * @param {ClippingContext} clippingContext - The clipping context.
+	 * @param {string} [passId] - An optional ID for identifying the pass.
+	 */
+	_renderObjectAsync( object, material, scene, camera, lightsNode, group, clippingContext, passId ) {
+
+		const renderObject = this._objects.get( object, material, scene, camera, lightsNode, this._currentRenderContext, clippingContext, passId );
+		renderObject.drawRange = object.geometry.drawRange;
+		renderObject.group = group;
+
+		if ( this._currentRenderBundle !== null ) {
+
+			const renderBundleData = this.backend.get( this._currentRenderBundle );
+
+			renderBundleData.renderObjects.push( renderObject );
+
+			renderObject.bundle = this._currentRenderBundle.bundleGroup;
+
+		}
+
+		// detect live structural mutations that do not bump the material
+		// version (e.g. blend mode values) — they request a replacement
+		// generation instead of mutating the active one
+
+		if ( renderObject.active !== null && this.backend.detectStructuralChange( renderObject ) === true ) {
+
+			renderObject.requestGeneration( renderObject.getCacheKey(), false, true );
+
+		}
+
+		// the draw gate: no active generation means the object is skipped
+		// until its first generation promotes — it pops in like a loading
+		// texture
+
+		if ( renderObject.active === null ) return;
+
+		//
+
+		const needsRefresh = this._nodes.needsRefresh( renderObject );
+
+		if ( needsRefresh ) {
+
+			this._nodes.updateBefore( renderObject );
+
+			this._geometries.updateForRender( renderObject );
+
+			this._nodes.updateForRender( renderObject );
+			this._bindings.updateForRender( renderObject );
+
+		}
+
+		// no pipeline update: the pipeline belongs to the promoted generation
+
+		this.backend.draw( renderObject, this.info );
+
+		if ( needsRefresh ) this._nodes.updateAfter( renderObject );
+
+	}
+
+	/**
 	 * A different implementation for `_handleObjectFunction` which only makes sure the object is ready for rendering.
 	 * Used in `compileAsync()`.
 	 *
@@ -3688,43 +3824,27 @@ class Renderer {
 	 */
 	_createObjectPipeline( object, material, scene, camera, lightsNode, group, clippingContext, passId ) {
 
-		// If in async compilation mode, queue the work for sequential execution
-		if ( this._compilationPromises !== null ) {
-
-			// Store work items instead of promises - will be processed sequentially
-			this._compilationPromises.push( {
-				object,
-				material,
-				scene,
-				camera,
-				lightsNode,
-				group,
-				clippingContext,
-				passId,
-				renderContext: this._currentRenderContext
-			} );
-
-			return;
-
-		}
-
-		// Sync path
 		const renderObject = this._objects.get( object, material, scene, camera, lightsNode, this._currentRenderContext, clippingContext, passId );
 		renderObject.drawRange = object.geometry.drawRange;
 		renderObject.group = group;
 
-		//
+		// request a background generation for the current structural state
+		// unless the render object is already compiled or already pending —
+		// the discovered task joins the compileAsync snapshot
 
-		this._nodes.updateBefore( renderObject );
+		if ( renderObject.active === null && renderObject.pending === null && this._pipelines.get( renderObject ).pipeline === undefined ) {
 
-		this._geometries.updateForRender( renderObject );
+			renderObject.requestGeneration( renderObject.initialCacheKey );
 
-		this._nodes.updateForRender( renderObject );
-		this._bindings.updateForRender( renderObject );
+		}
 
-		this._pipelines.getForRender( renderObject, this._compilationPromises );
+		const pending = renderObject.pending;
 
-		this._nodes.updateAfter( renderObject );
+		if ( pending !== null && pending.task !== null && this._compilationTasks !== null ) {
+
+			this._compilationTasks.push( pending.task );
+
+		}
 
 	}
 

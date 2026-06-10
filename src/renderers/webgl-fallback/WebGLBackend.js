@@ -1492,12 +1492,17 @@ class WebGLBackend extends Backend {
 	 * Creates a render pipeline for the given render object.
 	 *
 	 * @param {RenderObject} renderObject - The render object.
-	 * @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
+	 * @param {?Array<Promise>} promises - An array filled with pending program link
+	 * completions when asynchronous creation is requested and
+	 * `KHR_parallel_shader_compile` is available.
+	 * @param {?RenderGeneration} [generation=null] - When set, the pipeline is created
+	 * for a background generation using its pipeline and bind groups.
 	 */
-	createRenderPipeline( renderObject, promises ) {
+	createRenderPipeline( renderObject, promises, generation = null ) {
 
 		const gl = this.gl;
-		const pipeline = renderObject.pipeline;
+		const pipeline = generation !== null ? generation.pipeline : renderObject.pipeline;
+		const generationBindings = generation !== null ? generation.bindings : null;
 
 		// Program
 
@@ -1527,7 +1532,7 @@ class WebGLBackend extends Backend {
 
 					if ( gl.getProgramParameter( programGPU, parallel.COMPLETION_STATUS_KHR ) ) {
 
-						this._completeCompile( renderObject, pipeline );
+						this._completeCompile( renderObject, pipeline, generationBindings );
 						resolve();
 
 					} else {
@@ -1548,7 +1553,7 @@ class WebGLBackend extends Backend {
 
 		}
 
-		this._completeCompile( renderObject, pipeline );
+		this._completeCompile( renderObject, pipeline, generationBindings );
 
 	}
 
@@ -1667,8 +1672,10 @@ class WebGLBackend extends Backend {
 	 * @private
 	 * @param {RenderObject} renderObject - The render object.
 	 * @param {RenderPipeline} pipeline - The render pipeline.
+	 * @param {?Array<BindGroup>} [generationBindings=null] - When set, the bind groups
+	 * of the background generation the pipeline was created for.
 	 */
-	_completeCompile( renderObject, pipeline ) {
+	_completeCompile( renderObject, pipeline, generationBindings = null ) {
 
 		const { state, gl } = this;
 		const pipelineData = this.get( pipeline );
@@ -1684,7 +1691,7 @@ class WebGLBackend extends Backend {
 
 		// Bindings
 
-		const bindings = renderObject.getBindings();
+		const bindings = generationBindings !== null ? generationBindings : renderObject.getBindings();
 
 		this._setupBindings( bindings, programGPU );
 

@@ -150,6 +150,45 @@ class Bindings extends DataMap {
 	}
 
 	/**
+	 * Creates the given bind groups for a background generation. Resource
+	 * residency (texture uploads, uniform buffer creation) happens here, in
+	 * a budgeted scheduler task scoped to the pending generation — the
+	 * active generation's bindings are never touched.
+	 *
+	 * @param {Array<BindGroup>} bindings - The generation's bind groups.
+	 */
+	createForGeneration( bindings ) {
+
+		this._createBindings( bindings );
+
+	}
+
+	/**
+	 * Destroys the given bind groups of a discarded or replaced generation.
+	 *
+	 * @param {Array<BindGroup>} bindings - The bind groups.
+	 */
+	destroyForGeneration( bindings ) {
+
+		this._destroyBindings( bindings );
+
+	}
+
+	/**
+	 * Marks the given render object's bindings as initialized after a
+	 * promotion transferred the generation's bind groups to it. The
+	 * generation's `createForGeneration()` already performed residency.
+	 *
+	 * @param {RenderObject} renderObject - The render object.
+	 * @param {RenderGeneration} generation - The promoted generation.
+	 */
+	applyGeneration( renderObject /*, generation */ ) {
+
+		this.get( renderObject ).initialized = true;
+
+	}
+
+	/**
 	 * Deletes the bindings for the given compute node.
 	 *
 	 * @param {Node} computeNode - The compute node.
@@ -172,9 +211,13 @@ class Bindings extends DataMap {
 	 */
 	deleteForRender( renderObject ) {
 
-		const bindings = renderObject.getBindings();
+		// only destroy bindings that actually exist — never trigger a
+		// synchronous build for a render object that was disposed before
+		// its first generation was ready
 
-		this._destroyBindings( bindings );
+		const bindings = renderObject._bindings;
+
+		if ( bindings !== null ) this._destroyBindings( bindings );
 
 		this.delete( renderObject );
 

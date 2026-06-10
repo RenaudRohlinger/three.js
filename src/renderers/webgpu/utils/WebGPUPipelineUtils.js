@@ -96,11 +96,21 @@ class WebGPUPipelineUtils {
 	 * Creates a render pipeline for the given render object.
 	 *
 	 * @param {RenderObject} renderObject - The render object.
-	 * @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
+	 * @param {?Array<Promise>} promises - An array filled with pending pipeline
+	 * completions when asynchronous creation is requested.
+	 * @param {?RenderGeneration} [generation=null] - When set, the pipeline is created
+	 * for a background generation: structural material values are read from the
+	 * generation's draw snapshot and its bindings/attributes are used instead of
+	 * the render object's active state.
 	 */
-	createRenderPipeline( renderObject, promises ) {
+	createRenderPipeline( renderObject, promises, generation = null ) {
 
-		const { object, material, geometry, pipeline } = renderObject;
+		const { object, geometry } = renderObject;
+
+		const material = generation !== null ? generation.drawState : renderObject.material;
+		const pipeline = generation !== null ? generation.pipeline : renderObject.pipeline;
+		const bindGroups = generation !== null ? generation.bindings : renderObject.getBindings();
+
 		const { vertexProgram, fragmentProgram } = pipeline;
 
 		const backend = this.backend;
@@ -113,7 +123,7 @@ class WebGPUPipelineUtils {
 
 		const bindGroupLayouts = [];
 
-		for ( const bindGroup of renderObject.getBindings() ) {
+		for ( const bindGroup of bindGroups ) {
 
 			const bindingsData = backend.get( bindGroup );
 			const { layoutGPU } = bindingsData.layout;
@@ -124,7 +134,7 @@ class WebGPUPipelineUtils {
 
 		// vertex buffers
 
-		const vertexBuffers = backend.attributeUtils.createShaderVertexBuffers( renderObject );
+		const vertexBuffers = backend.attributeUtils.createShaderVertexBuffers( renderObject, generation !== null ? generation.attributes : null );
 
 		// material blending
 

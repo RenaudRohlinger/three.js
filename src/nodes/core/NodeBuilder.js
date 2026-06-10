@@ -30,7 +30,7 @@ import { Vector2 } from '../../math/Vector2.js';
 import { Vector3 } from '../../math/Vector3.js';
 import { Vector4 } from '../../math/Vector4.js';
 import { Float16BufferAttribute } from '../../core/BufferAttribute.js';
-import { warn, error, yieldToMain } from '../../utils.js';
+import { warn, error } from '../../utils.js';
 
 let _id = 0;
 
@@ -3217,36 +3217,72 @@ class NodeBuilder {
 	}
 
 	/**
-	 * Async version of build() that yields to main thread between shader stages.
-	 * Use this in compileAsync() to prevent blocking the main thread.
+	 * Incremental, deadline-aware form of `build()`. Advances the build by
+	 * bounded units of work — one flow node at a time — and returns whether
+	 * the build has completed. Call repeatedly until it returns `true`.
 	 *
-	 * @return {Promise<NodeBuilder>} A promise that resolves to this node builder.
+	 * A single flow unit (one `node.build()` call tree or the prebuild) is
+	 * not preemptible; the deadline is checked between units, so one large
+	 * unit can overrun the deadline. This is the documented non-preemptible
+	 * floor of cooperative compilation.
+	 *
+	 * The first unit of every call always runs, guaranteeing forward progress
+	 * even when the deadline has already passed on entry.
+	 *
+	 * @param {number} deadline - Absolute `performance.now()` deadline.
+	 * @return {boolean} Whether the build has completed or not.
 	 */
-	async buildAsync() {
+	buildStep( deadline ) {
 
-		this.prebuild();
+		let state = this._buildStepState;
+
+		if ( state === undefined || state === null ) {
+
+			this.prebuild();
+
+			state = this._buildStepState = { stage: 0, shader: 0, node: 0, positionFlowed: false };
+
+			if ( performance.now() >= deadline ) return false;
+
+		}
 
 		// setup() -> stage 1: create possible new nodes and/or return an output reference node
 		// analyze()   -> stage 2: analyze nodes to possible optimization and validation
 		// generate()  -> stage 3: generate shader
 
-		for ( const buildStage of defaultBuildStages ) {
+		while ( state.stage < defaultBuildStages.length ) {
+
+			const buildStage = defaultBuildStages[ state.stage ];
 
 			this.setBuildStage( buildStage );
 
-			if ( this.context.position && this.context.position.isNode ) {
+			if ( state.positionFlowed === false ) {
 
-				this.flowNodeFromShaderStage( 'vertex', this.context.position );
+				if ( this.context.position && this.context.position.isNode ) {
+
+					this.flowNodeFromShaderStage( 'vertex', this.context.position );
+
+				}
+
+				state.positionFlowed = true;
+
+				if ( performance.now() >= deadline ) return false;
 
 			}
 
-			for ( const shaderStage of shaderStages ) {
+			while ( state.shader < shaderStages.length ) {
+
+				const shaderStage = shaderStages[ state.shader ];
 
 				this.setShaderStage( shaderStage );
 
 				const flowNodes = this.flowNodes[ shaderStage ];
 
-				for ( const node of flowNodes ) {
+				while ( state.node < flowNodes.length ) {
+
+					const node = flowNodes[ state.node ];
+
+					state.node ++;
 
 					if ( buildStage === 'generate' ) {
 
@@ -3258,12 +3294,18 @@ class NodeBuilder {
 
 					}
 
+					if ( performance.now() >= deadline ) return false;
+
 				}
 
-				// Yield to main thread after each shader stage to prevent blocking
-				await yieldToMain();
+				state.node = 0;
+				state.shader ++;
 
 			}
+
+			state.shader = 0;
+			state.positionFlowed = false;
+			state.stage ++;
 
 		}
 
@@ -3275,7 +3317,9 @@ class NodeBuilder {
 		this.buildCode();
 		this.buildUpdateNodes();
 
-		return this;
+		this._buildStepState = null;
+
+		return true;
 
 	}
 

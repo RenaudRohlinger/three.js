@@ -74,6 +74,16 @@ class Pipelines extends DataMap {
 			compute: new Map()
 		};
 
+		/**
+		 * Completion promises of pipelines that are still being created
+		 * asynchronously, used for promise deduplication: generations
+		 * requesting a pipeline that is already building join its promise.
+		 *
+		 * @private
+		 * @type {Map<Pipeline,Promise>}
+		 */
+		this._pendingPipelines = new Map();
+
 	}
 
 	/**
@@ -154,10 +164,9 @@ class Pipelines extends DataMap {
 	 * Returns a render pipeline for the given render object.
 	 *
 	 * @param {RenderObject} renderObject - The render object.
-	 * @param {?Array<Promise>} [promises=null] - An array of compilation promises which is only relevant in context of `Renderer.compileAsync()`.
 	 * @return {RenderObjectPipeline} The render pipeline.
 	 */
-	getForRender( renderObject, promises = null ) {
+	getForRender( renderObject ) {
 
 		const { backend } = this;
 
@@ -221,7 +230,7 @@ class Pipelines extends DataMap {
 
 				if ( previousPipeline && previousPipeline.usedTimes === 0 ) this._releasePipeline( previousPipeline );
 
-				pipeline = this._getRenderPipeline( renderObject, stageVertex, stageFragment, cacheKey, promises );
+				pipeline = this._getRenderPipeline( renderObject, stageVertex, stageFragment, cacheKey );
 
 			} else {
 
@@ -320,6 +329,7 @@ class Pipelines extends DataMap {
 			fragment: new Map(),
 			compute: new Map()
 		};
+		this._pendingPipelines = new Map();
 
 	}
 
@@ -374,10 +384,9 @@ class Pipelines extends DataMap {
 	 * @param {ProgrammableStage} stageVertex - The programmable stage representing the vertex shader.
 	 * @param {ProgrammableStage} stageFragment - The programmable stage representing the fragment shader.
 	 * @param {string} cacheKey - The cache key.
-	 * @param {?Array<Promise>} promises - An array of compilation promises which is only relevant in context of `Renderer.compileAsync()`.
 	 * @return {RenderObjectPipeline} The render pipeline.
 	 */
-	_getRenderPipeline( renderObject, stageVertex, stageFragment, cacheKey, promises ) {
+	_getRenderPipeline( renderObject, stageVertex, stageFragment, cacheKey ) {
 
 		// check for existing pipeline
 
@@ -393,15 +402,193 @@ class Pipelines extends DataMap {
 
 			renderObject.pipeline = pipeline;
 
-			// The `promises` array is `null` by default and only set to an empty array when
-			// `Renderer.compileAsync()` is used. The next call actually fills the array with
-			// pending promises that resolve when the render pipelines are ready for rendering.
-
-			this.backend.createRenderPipeline( renderObject, promises );
+			this.backend.createRenderPipeline( renderObject, null );
 
 		}
 
 		return pipeline;
+
+	}
+
+	/**
+	 * Requests the render pipeline for a background generation. Programs are
+	 * shared by shader code, pipelines by their full cache key (computed
+	 * from the generation's structural draw snapshot, never from live
+	 * material state). Pipelines are created asynchronously; generations
+	 * requesting a pipeline that is still building join its completion
+	 * promise.
+	 *
+	 * The generation takes one reference unit on the pipeline and its
+	 * programs, released on discard or transferred at promotion.
+	 *
+	 * @param {RenderObject} renderObject - The owning render object.
+	 * @param {RenderGeneration} generation - The candidate generation.
+	 * @param {WorkTask} task - The requesting task, for pipeline capacity parking.
+	 * @return {?{pipeline:RenderObjectPipeline,promise:?Promise}} The pipeline and its
+	 * completion promise (`null` when ready), or `null` when pipeline capacity is
+	 * exhausted and the task must block.
+	 */
+	requestGenerationPipeline( renderObject, generation, task ) {
+
+		const { backend } = this;
+
+		const nodeBuilderState = generation.nodeBuilderState;
+		const name = generation.drawState !== null ? generation.drawState.name : '';
+
+		// programmable stages
+
+		let stageVertex = this.programs.vertex.get( nodeBuilderState.vertexShader );
+
+		if ( stageVertex === undefined ) {
+
+			stageVertex = new ProgrammableStage( nodeBuilderState.vertexShader, 'vertex', name );
+			this.programs.vertex.set( nodeBuilderState.vertexShader, stageVertex );
+
+			backend.createProgram( stageVertex );
+			this.info.createProgram( stageVertex );
+
+		}
+
+		let stageFragment = this.programs.fragment.get( nodeBuilderState.fragmentShader );
+
+		if ( stageFragment === undefined ) {
+
+			stageFragment = new ProgrammableStage( nodeBuilderState.fragmentShader, 'fragment', name );
+			this.programs.fragment.set( nodeBuilderState.fragmentShader, stageFragment );
+
+			backend.createProgram( stageFragment );
+			this.info.createProgram( stageFragment );
+
+		}
+
+		// pipeline, keyed by the generation's structural snapshot
+
+		const cacheKey = stageVertex.id + ',' + stageFragment.id + ',' + backend.getRenderCacheKey( renderObject, generation.drawState );
+
+		let pipeline = this.caches.get( cacheKey );
+		let promise = null;
+
+		if ( pipeline === undefined ) {
+
+			const scheduler = task.scheduler;
+
+			if ( scheduler !== null && scheduler.acquirePipelineSlot( task ) === false ) return null;
+
+			pipeline = new RenderObjectPipeline( cacheKey, stageVertex, stageFragment );
+
+			this.caches.set( cacheKey, pipeline );
+
+			generation.pipeline = pipeline;
+
+			const promises = [];
+
+			backend.createRenderPipeline( renderObject, promises, generation );
+
+			if ( promises.length > 0 ) {
+
+				promise = Promise.all( promises ).then( () => {
+
+					this._pendingPipelines.delete( pipeline );
+
+					if ( scheduler !== null ) scheduler.releasePipelineSlot();
+
+				} );
+
+				this._pendingPipelines.set( pipeline, promise );
+
+			} else {
+
+				// the backend created the pipeline synchronously (e.g. WebGL
+				// without KHR_parallel_shader_compile — the one documented
+				// remaining synchronous step)
+
+				if ( scheduler !== null ) scheduler.releasePipelineSlot();
+
+			}
+
+		} else {
+
+			generation.pipeline = pipeline;
+
+			const pending = this._pendingPipelines.get( pipeline );
+
+			if ( pending !== undefined ) promise = pending;
+
+		}
+
+		pipeline.usedTimes ++;
+		stageVertex.usedTimes ++;
+		stageFragment.usedTimes ++;
+
+		return { pipeline, promise };
+
+	}
+
+	/**
+	 * Returns `true` if the given pipeline's backend object is ready.
+	 *
+	 * @param {Pipeline} pipeline - The pipeline.
+	 * @return {boolean} Whether the pipeline is ready or not.
+	 */
+	isPipelineReady( pipeline ) {
+
+		const pipelineData = this.backend.get( pipeline );
+
+		return pipelineData.pipeline !== undefined && pipelineData.pipeline !== null;
+
+	}
+
+	/**
+	 * Returns `true` if the given pipeline's creation failed.
+	 *
+	 * @param {Pipeline} pipeline - The pipeline.
+	 * @return {boolean} Whether the pipeline creation failed or not.
+	 */
+	isPipelineFailed( pipeline ) {
+
+		return this.backend.get( pipeline ).error === true;
+
+	}
+
+	/**
+	 * Releases one reference unit on the given render pipeline and its
+	 * programs, freeing them when unused.
+	 *
+	 * @param {RenderObjectPipeline} pipeline - The pipeline.
+	 */
+	releaseGenerationPipeline( pipeline ) {
+
+		pipeline.usedTimes --;
+
+		if ( pipeline.usedTimes === 0 ) this._releasePipeline( pipeline );
+
+		pipeline.vertexProgram.usedTimes --;
+		pipeline.fragmentProgram.usedTimes --;
+
+		if ( pipeline.vertexProgram.usedTimes === 0 ) this._releaseProgram( pipeline.vertexProgram );
+		if ( pipeline.fragmentProgram.usedTimes === 0 ) this._releaseProgram( pipeline.fragmentProgram );
+
+	}
+
+	/**
+	 * Transfers the given generation's pipeline to the render object's data.
+	 * Called at promotion. The previously referenced pipeline is returned
+	 * for deferred release.
+	 *
+	 * @param {RenderObject} renderObject - The render object.
+	 * @param {RenderGeneration} generation - The promoted generation.
+	 * @return {?RenderObjectPipeline} The previously referenced pipeline, or `null`.
+	 */
+	applyGeneration( renderObject, generation ) {
+
+		const data = this.get( renderObject );
+
+		const previousPipeline = ( data.pipeline !== undefined && data.pipeline !== null ) ? data.pipeline : null;
+
+		data.pipeline = generation.pipeline;
+		renderObject.pipeline = generation.pipeline;
+
+		return previousPipeline;
 
 	}
 

@@ -1721,7 +1721,12 @@ class WebGPUBackend extends Backend {
 	 */
 	_draw( renderObject, info, renderContextData, pipelineGPU, bindings, vertexBuffers, drawParams, passEncoderGPU, currentSets ) {
 
-		const { object, material, context } = renderObject;
+		const { object, context } = renderObject;
+
+		// in async compilation mode, encode-time structural values come from
+		// the promoted draw snapshot — never from the live material
+
+		const material = renderObject.drawState !== null ? renderObject.drawState : renderObject.material;
 
 		const index = renderObject.getIndex();
 		const hasIndex = ( index !== null );
@@ -2033,7 +2038,38 @@ class WebGPUBackend extends Backend {
 
 		const data = this.get( renderObject );
 
-		const { object, material } = renderObject;
+		const material = renderObject.material;
+
+		let needsUpdate = false;
+
+		if ( data.material !== material || data.materialVersion !== material.version ) {
+
+			data.material = material; data.materialVersion = material.version;
+
+			needsUpdate = true;
+
+		}
+
+		return this._syncStructuralState( data, renderObject, material ) || needsUpdate;
+
+	}
+
+	/**
+	 * Compares the structural pipeline state of the given source (live
+	 * material or draw snapshot) against the cached values and updates the
+	 * cache. Used by `needsRenderUpdate()` and by async compilation mode's
+	 * change detection, which deliberately excludes the material version
+	 * (version-driven changes are handled by the render object cache key).
+	 *
+	 * @private
+	 * @param {Object} data - The render object's backend data.
+	 * @param {RenderObject} renderObject - The render object.
+	 * @param {Object} material - The live material or a structural draw snapshot.
+	 * @return {boolean} Whether a structural value changed or not.
+	 */
+	_syncStructuralState( data, renderObject, material ) {
+
+		const { object } = renderObject;
 
 		const utils = this.utils;
 
@@ -2045,8 +2081,7 @@ class WebGPUBackend extends Backend {
 
 		let needsUpdate = false;
 
-		if ( data.material !== material || data.materialVersion !== material.version ||
-			data.transparent !== material.transparent || data.blending !== material.blending || data.premultipliedAlpha !== material.premultipliedAlpha ||
+		if ( data.transparent !== material.transparent || data.blending !== material.blending || data.premultipliedAlpha !== material.premultipliedAlpha ||
 			data.blendSrc !== material.blendSrc || data.blendDst !== material.blendDst || data.blendEquation !== material.blendEquation ||
 			data.blendSrcAlpha !== material.blendSrcAlpha || data.blendDstAlpha !== material.blendDstAlpha || data.blendEquationAlpha !== material.blendEquationAlpha ||
 			data.colorWrite !== material.colorWrite || data.depthWrite !== material.depthWrite || data.depthTest !== material.depthTest || data.depthFunc !== material.depthFunc ||
@@ -2060,7 +2095,6 @@ class WebGPUBackend extends Backend {
 			data.clippingContextCacheKey !== renderObject.clippingContextCacheKey
 		) {
 
-			data.material = material; data.materialVersion = material.version;
 			data.transparent = material.transparent; data.blending = material.blending; data.premultipliedAlpha = material.premultipliedAlpha;
 			data.blendSrc = material.blendSrc; data.blendDst = material.blendDst; data.blendEquation = material.blendEquation;
 			data.blendSrcAlpha = material.blendSrcAlpha; data.blendDstAlpha = material.blendDstAlpha; data.blendEquationAlpha = material.blendEquationAlpha;
@@ -2086,14 +2120,54 @@ class WebGPUBackend extends Backend {
 	}
 
 	/**
+	 * Detects live structural mutations that do not bump the material
+	 * version (e.g. blend mode values). Used by async compilation mode to
+	 * request a replacement generation instead of synchronously recreating
+	 * the pipeline. The comparison state is primed from the promoted draw
+	 * snapshot, see `syncRenderUpdateState()`.
+	 *
+	 * @param {RenderObject} renderObject - The render object.
+	 * @return {boolean} Whether a structural value diverged from the promoted snapshot.
+	 */
+	detectStructuralChange( renderObject ) {
+
+		return this._syncStructuralState( this.get( renderObject ), renderObject, renderObject.material );
+
+	}
+
+	/**
+	 * Primes the structural change detection state from a promoted
+	 * generation's draw snapshot. Material-derived values come from the
+	 * snapshot — so live mutations made during the background build are
+	 * detected on the next frame — while context-derived values are read
+	 * live at the promotion safe point.
+	 *
+	 * @param {RenderObject} renderObject - The render object.
+	 * @param {Object} drawState - The promoted draw snapshot.
+	 */
+	syncRenderUpdateState( renderObject, drawState ) {
+
+		const data = this.get( renderObject );
+
+		data.material = renderObject.material; data.materialVersion = renderObject.material.version;
+
+		this._syncStructuralState( data, renderObject, drawState );
+
+	}
+
+	/**
 	 * Returns a cache key that is used to identify render pipelines.
 	 *
 	 * @param {RenderObject} renderObject - The render object.
+	 * @param {?Object} [stateOverride=null] - When set, material-derived values are
+	 * read from this structural draw snapshot instead of the live material.
 	 * @return {string} The cache key.
 	 */
-	getRenderCacheKey( renderObject ) {
+	getRenderCacheKey( renderObject, stateOverride = null ) {
 
-		const { object, material } = renderObject;
+		const { object } = renderObject;
+
+		const material = stateOverride !== null ? stateOverride : renderObject.material;
 
 		const utils = this.utils;
 		const renderContext = renderObject.context;
@@ -2302,11 +2376,14 @@ class WebGPUBackend extends Backend {
 	 * Creates a render pipeline for the given render object.
 	 *
 	 * @param {RenderObject} renderObject - The render object.
-	 * @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
+	 * @param {?Array<Promise>} promises - An array filled with pending pipeline
+	 * completions when asynchronous creation is requested.
+	 * @param {?RenderGeneration} [generation=null] - When set, the pipeline is created
+	 * for a background generation from its structural draw snapshot and resources.
 	 */
-	createRenderPipeline( renderObject, promises ) {
+	createRenderPipeline( renderObject, promises, generation = null ) {
 
-		this.pipelineUtils.createRenderPipeline( renderObject, promises );
+		this.pipelineUtils.createRenderPipeline( renderObject, promises, generation );
 
 	}
 

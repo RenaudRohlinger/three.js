@@ -285,18 +285,26 @@ class RenderList {
 	 * @param {number} z - Th 3D object's depth value (z value in clip space).
 	 * @param {?number} group - {?Object} group - Only relevant for objects using multiple materials. This represents a group entry from the respective `BufferGeometry`.
 	 * @param {ClippingContext} clippingContext - The current clipping context.
+	 * @param {?{transparent:boolean,doublePass:boolean}} [classification=null] - When set,
+	 * the promoted classification snapshot used instead of live material state. Async
+	 * compilation mode classifies render lists from the promoted truth so list bucket,
+	 * pass membership and pipeline always agree.
 	 */
-	push( object, geometry, material, groupOrder, z, group, clippingContext ) {
+	push( object, geometry, material, groupOrder, z, group, clippingContext, classification = null ) {
 
 		const renderItem = this.getNextRenderItem( object, geometry, material, groupOrder, z, group, clippingContext );
 
 		if ( object.occlusionTest === true ) this.occlusionQueryCount ++;
 
-		if ( material.transparent === true || material.transmission > 0 ||
+		const transparent = classification !== null ? classification.transparent : ( material.transparent === true || material.transmission > 0 ||
 			( material.transmissionNode && material.transmissionNode.isNode ) ||
-			( material.backdropNode && material.backdropNode.isNode ) ) {
+			( material.backdropNode && material.backdropNode.isNode ) );
 
-			if ( needsDoublePass( material ) ) this.transparentDoublePass.push( renderItem );
+		if ( transparent === true ) {
+
+			const doublePass = classification !== null ? classification.doublePass : needsDoublePass( material );
+
+			if ( doublePass === true ) this.transparentDoublePass.push( renderItem );
 
 			this.transparent.push( renderItem );
 
@@ -319,16 +327,22 @@ class RenderList {
 	 * @param {number} z - Th 3D object's depth value (z value in clip space).
 	 * @param {?number} group - {?Object} group - Only relevant for objects using multiple materials. This represents a group entry from the respective `BufferGeometry`.
 	 * @param {ClippingContext} clippingContext - The current clipping context.
+	 * @param {?{transparent:boolean,doublePass:boolean}} [classification=null] - When set,
+	 * the promoted classification snapshot used instead of live material state.
 	 */
-	unshift( object, geometry, material, groupOrder, z, group, clippingContext ) {
+	unshift( object, geometry, material, groupOrder, z, group, clippingContext, classification = null ) {
 
 		const renderItem = this.getNextRenderItem( object, geometry, material, groupOrder, z, group, clippingContext );
 
-		if ( material.transparent === true || material.transmission > 0 ||
+		const transparent = classification !== null ? classification.transparent : ( material.transparent === true || material.transmission > 0 ||
 			( material.transmissionNode && material.transmissionNode.isNode ) ||
-			( material.backdropNode && material.backdropNode.isNode ) ) {
+			( material.backdropNode && material.backdropNode.isNode ) );
 
-			if ( needsDoublePass( material ) ) this.transparentDoublePass.unshift( renderItem );
+		if ( transparent === true ) {
+
+			const doublePass = classification !== null ? classification.doublePass : needsDoublePass( material );
+
+			if ( doublePass === true ) this.transparentDoublePass.unshift( renderItem );
 
 			this.transparent.unshift( renderItem );
 

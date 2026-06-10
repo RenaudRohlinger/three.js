@@ -1,7 +1,39 @@
 import ChainMap from './ChainMap.js';
 import RenderObject from './RenderObject.js';
+import { DoubleSide } from '../../constants.js';
 
 const _chainKeys = [];
+
+/**
+ * Returns `true` if the given material classifies as transparent for
+ * render-list purposes.
+ *
+ * @private
+ * @param {Material} material - The material.
+ * @return {boolean} Whether the material classifies as transparent or not.
+ */
+function isTransparent( material ) {
+
+	return material.transparent === true || material.transmission > 0 ||
+		( material.transmissionNode && material.transmissionNode.isNode ) ||
+		( material.backdropNode && material.backdropNode.isNode ) ? true : false;
+
+}
+
+/**
+ * Returns `true` if the given transparent material requires a double pass.
+ *
+ * @private
+ * @param {Material} material - The material.
+ * @return {boolean} Whether the given material requires a double pass or not.
+ */
+function needsDoublePass( material ) {
+
+	const hasTransmission = material.transmission > 0 || ( material.transmissionNode && material.transmissionNode.isNode );
+
+	return hasTransmission && material.side === DoubleSide && material.forceSinglePass === false;
+
+}
 
 /**
  * This module manages the render objects of the renderer.
@@ -72,6 +104,93 @@ class RenderObjects {
 		 */
 		this.chainMaps = {};
 
+		/**
+		 * Per-material promoted classification snapshots, used by async
+		 * compilation mode to classify render lists from the promoted truth.
+		 *
+		 * @private
+		 * @type {WeakMap<Material,{transparent:boolean,doublePass:boolean}>}
+		 */
+		this._classifications = new WeakMap();
+
+	}
+
+	/**
+	 * Updates the promoted classification snapshot for the given material
+	 * from its live state. Called only at promotion — a top-level safe
+	 * point, outside the renderer's temporary pass-related `material.side`
+	 * mutations — so the captured values are always the application's.
+	 *
+	 * @param {Material} material - The material.
+	 */
+	updateClassification( material ) {
+
+		let classification = this._classifications.get( material );
+
+		if ( classification === undefined ) {
+
+			classification = { transparent: false, doublePass: false };
+
+			this._classifications.set( material, classification );
+
+		}
+
+		classification.transparent = isTransparent( material );
+		classification.doublePass = needsDoublePass( material );
+
+	}
+
+	/**
+	 * Returns the promoted classification snapshot for the given material,
+	 * or `null` when no generation has ever been promoted for it (new
+	 * materials classify live; their draws are skipped until ready).
+	 *
+	 * @param {Material} material - The material.
+	 * @return {?{transparent:boolean,doublePass:boolean}} The classification snapshot.
+	 */
+	getClassification( material ) {
+
+		const classification = this._classifications.get( material );
+
+		return classification !== undefined ? classification : null;
+
+	}
+
+	/**
+	 * Releases the resources held by the given generation. Generations own a
+	 * reference-count unit on everything they capture until they are promoted
+	 * (ownership transfers to the render object) or discarded.
+	 *
+	 * @param {RenderGeneration} generation - The generation to release.
+	 * @param {string} [status='stale'] - The terminal status to apply.
+	 */
+	releaseGeneration( generation, status = 'stale' ) {
+
+		if ( generation.isTerminal() === true || generation.status === 'active' ) return;
+
+		generation.status = status;
+
+		if ( generation.nodeBuilderState !== null ) {
+
+			this.nodes.releaseBuilderState( generation.cacheKey, generation.nodeBuilderState );
+			generation.nodeBuilderState = null;
+
+		}
+
+		if ( generation.pipeline !== null ) {
+
+			this.pipelines.releaseGenerationPipeline( generation.pipeline );
+			generation.pipeline = null;
+
+		}
+
+		if ( generation.bindings !== null ) {
+
+			this.bindings.destroyForGeneration( generation.bindings );
+			generation.bindings = null;
+
+		}
+
 	}
 
 	/**
@@ -118,7 +237,11 @@ class RenderObjects {
 
 			renderObject.updateClipping( clippingContext );
 
+			let geometryChanged = false;
+
 			if ( renderObject.needsGeometryUpdate ) {
+
+				geometryChanged = true;
 
 				renderObject.setGeometry( object.geometry );
 
@@ -126,7 +249,23 @@ class RenderObjects {
 
 			if ( renderObject.version !== material.version || renderObject.needsUpdate ) {
 
-				if ( renderObject.initialCacheKey !== renderObject.getCacheKey() ) {
+				if ( this.renderer._asyncCompilation === true ) {
+
+					// async mode: a structural change requests a background
+					// generation; the render object keeps its identity and
+					// keeps drawing its active generation until promotion
+
+					const cacheKey = renderObject.getCacheKey();
+
+					if ( renderObject.initialCacheKey !== cacheKey ) {
+
+						renderObject.requestGeneration( cacheKey, geometryChanged );
+
+					}
+
+					renderObject.version = material.version;
+
+				} else if ( renderObject.initialCacheKey !== renderObject.getCacheKey() ) {
 
 					renderObject.dispose();
 
@@ -207,6 +346,15 @@ class RenderObjects {
 			chainMap.delete( renderObject.getChainArray() );
 
 		};
+
+		if ( renderer._asyncCompilation === true ) {
+
+			// new drawables compile in the background and are skipped until
+			// their first generation promotes
+
+			renderObject.requestGeneration( renderObject.initialCacheKey );
+
+		}
 
 		return renderObject;
 

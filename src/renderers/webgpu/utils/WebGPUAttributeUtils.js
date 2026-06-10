@@ -242,11 +242,15 @@ class WebGPUAttributeUtils {
 	 * require when creating a render pipeline for the given render object.
 	 *
 	 * @param {RenderObject} renderObject - The render object.
+	 * @param {?Array<BufferAttribute>} [attributes=null] - When set, the vertex layout
+	 * is computed from these attributes (a background generation's) instead of the
+	 * render object's active attributes.
 	 * @return {Array<Object>} An array holding objects which describe the vertex buffer layout.
 	 */
-	createShaderVertexBuffers( renderObject ) {
+	createShaderVertexBuffers( renderObject, attributes = null ) {
 
-		const attributes = renderObject.getAttributes();
+		if ( attributes === null ) attributes = renderObject.getAttributes();
+
 		const vertexBuffers = new Map();
 
 		for ( let slot = 0; slot < attributes.length; slot ++ ) {

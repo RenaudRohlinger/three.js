@@ -233,9 +233,14 @@ class Backend {
 	 *
 	 * @abstract
 	 * @param {RenderObject} renderObject - The render object.
-	 * @param {Array<Promise>} promises - An array of compilation promises which are used in `compileAsync()`.
+	 * @param {?Array<Promise>} promises - An array of compilation promises filled with
+	 * pending pipeline completions when asynchronous creation is requested.
+	 * @param {?RenderGeneration} [generation=null] - When set, the pipeline is created
+	 * for a background generation: structural state is read from the generation's
+	 * draw snapshot and its bindings/attributes instead of the render object's
+	 * active state.
 	 */
-	createRenderPipeline( /*renderObject, promises*/ ) { }
+	createRenderPipeline( /*renderObject, promises, generation = null*/ ) { }
 
 	/**
 	 * Creates a compute pipeline for the given compute node.
@@ -258,13 +263,43 @@ class Backend {
 	needsRenderUpdate( /*renderObject*/ ) { }
 
 	/**
+	 * Primes the structural change detection state of `needsRenderUpdate()`
+	 * from a promoted generation's draw snapshot. Used by async compilation
+	 * mode so live mutations made while a generation compiled are still
+	 * detected after promotion.
+	 *
+	 * @abstract
+	 * @param {RenderObject} renderObject - The render object.
+	 * @param {Object} drawState - The promoted draw snapshot.
+	 */
+	syncRenderUpdateState( /*renderObject, drawState*/ ) { }
+
+	/**
+	 * Detects live structural mutations that do not bump the material
+	 * version. Async compilation mode requests a replacement generation when
+	 * this returns `true`. Backends that read pipeline state live at encode
+	 * time (e.g. WebGL) do not need to implement this.
+	 *
+	 * @abstract
+	 * @param {RenderObject} renderObject - The render object.
+	 * @return {boolean} Whether a structural value diverged from the promoted snapshot.
+	 */
+	detectStructuralChange( /*renderObject*/ ) {
+
+		return false;
+
+	}
+
+	/**
 	 * Returns a cache key that is used to identify render pipelines.
 	 *
 	 * @abstract
 	 * @param {RenderObject} renderObject - The render object.
+	 * @param {?Object} [stateOverride=null] - When set, material-derived values are
+	 * read from this structural draw snapshot instead of the live material.
 	 * @return {string} The cache key.
 	 */
-	getRenderCacheKey( /*renderObject*/ ) { }
+	getRenderCacheKey( /*renderObject, stateOverride = null*/ ) { }
 
 	// node builder
 

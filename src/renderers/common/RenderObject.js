@@ -1,4 +1,7 @@
 import { hash, hashString } from '../../nodes/core/NodeUtils.js';
+import RenderGeneration, { captureDrawState, drawStateEquals } from './RenderGeneration.js';
+import RenderGenerationTask from './RenderGenerationTask.js';
+import WorkTask from './WorkTask.js';
 
 let _id = 0;
 
@@ -292,6 +295,45 @@ class RenderObject {
 		this._sourceMaterial = renderer._currentSourceMaterial;
 
 		/**
+		 * The render generation currently drawn in async compilation mode.
+		 * Drawing reads only from here; `null` means the render object is
+		 * skipped until its first generation promotes.
+		 *
+		 * @type {?RenderGeneration}
+		 * @default null
+		 */
+		this.active = null;
+
+		/**
+		 * The render generation being prepared in the background.
+		 *
+		 * @type {?RenderGeneration}
+		 * @default null
+		 */
+		this.pending = null;
+
+		/**
+		 * Bumped on every structural generation request. Candidates capture
+		 * this value and are re-validated against it at every phase
+		 * transition; only the latest requested version can promote.
+		 *
+		 * @type {number}
+		 * @default 0
+		 */
+		this.generationVersion = 0;
+
+		/**
+		 * The structural draw snapshot of the active generation. In async
+		 * compilation mode the backend reads encode-time structural values
+		 * (e.g. `wireframe`, `stencilRef`) from here instead of from the
+		 * live material.
+		 *
+		 * @type {?Object}
+		 * @default null
+		 */
+		this.drawState = null;
+
+		/**
 		 * An event listener which is defined by `RenderObjects`. It performs
 		 * clean up tasks when `dispose()` on this render object.
 		 *
@@ -497,16 +539,18 @@ class RenderObject {
 	}
 
 	/**
-	 * Returns the buffer attributes of the render object. The returned array holds
-	 * attribute definitions on geometry and node level.
+	 * Computes the buffer attributes for the given node builder state. The
+	 * returned data holds attribute definitions on geometry and node level.
 	 *
-	 * @return {Array<BufferAttribute>} An array with buffer attributes.
+	 * This is a pure computation without caching, so background generations
+	 * can resolve their attributes without touching the active state.
+	 *
+	 * @param {NodeBuilderState} nodeBuilderState - The node builder state.
+	 * @return {{attributes:Array<BufferAttribute>,vertexBuffers:Array<BufferAttribute|InterleavedBuffer>,attributesId:Object<string,number>}} The attribute data.
 	 */
-	getAttributes() {
+	computeAttributes( nodeBuilderState ) {
 
-		if ( this.attributes !== null ) return this.attributes;
-
-		const nodeAttributes = this.getNodeBuilderState().nodeAttributes;
+		const nodeAttributes = nodeBuilderState.nodeAttributes;
 		const geometry = this.geometry;
 
 		const attributes = [];
@@ -553,9 +597,25 @@ class RenderObject {
 
 		}
 
+		return { attributes, vertexBuffers: Array.from( vertexBuffers.values() ), attributesId };
+
+	}
+
+	/**
+	 * Returns the buffer attributes of the render object. The returned array holds
+	 * attribute definitions on geometry and node level.
+	 *
+	 * @return {Array<BufferAttribute>} An array with buffer attributes.
+	 */
+	getAttributes() {
+
+		if ( this.attributes !== null ) return this.attributes;
+
+		const { attributes, vertexBuffers, attributesId } = this.computeAttributes( this.getNodeBuilderState() );
+
 		this.attributes = attributes;
 		this.attributesId = attributesId;
-		this.vertexBuffers = Array.from( vertexBuffers.values() );
+		this.vertexBuffers = vertexBuffers;
 
 		return attributes;
 
@@ -613,7 +673,9 @@ class RenderObject {
 
 		let rangeFactor = 1;
 
-		if ( material.wireframe === true && ! object.isPoints && ! object.isLineSegments && ! object.isLine && ! object.isLineLoop ) {
+		const wireframe = this.drawState !== null ? this.drawState.wireframe : material.wireframe;
+
+		if ( wireframe === true && ! object.isPoints && ! object.isLineSegments && ! object.isLine && ! object.isLineLoop ) {
 
 			rangeFactor = 2;
 
@@ -932,9 +994,235 @@ class RenderObject {
 	}
 
 	/**
+	 * Requests a background generation for the given structural cache key.
+	 *
+	 * The render object keeps drawing its active generation (or keeps being
+	 * skipped when it has none) until the candidate promotes at a top-level
+	 * safe point. The requested-state keys are updated eagerly so unchanged
+	 * frames perform no further key computation while the candidate compiles.
+	 *
+	 * @param {number} cacheKey - The structural cache key to build.
+	 * @param {boolean} [dropActive=false] - Whether the active generation has become
+	 * invalid (e.g. a structural geometry change) and drawing must be skipped until
+	 * the replacement is ready.
+	 * @param {boolean} [force=false] - Whether to request a new candidate even when
+	 * the cache key is unchanged. Used for pipeline-only state changes that do not
+	 * affect the node cache key (e.g. blend mode values).
+	 */
+	requestGeneration( cacheKey, dropActive = false, force = false ) {
+
+		const renderer = this.renderer;
+		const scheduler = renderer._scheduler;
+
+		if ( scheduler === null ) return;
+
+		this.generationVersion ++;
+
+		this.initialCacheKey = cacheKey;
+		this.initialNodesCacheKey = this.getDynamicCacheKey();
+
+		const drawState = captureDrawState( this.material );
+
+		const pending = this.pending;
+
+		if ( pending !== null ) {
+
+			const covered = pending.cacheKey === cacheKey && pending.isTerminal() === false &&
+				( force === false || drawStateEquals( pending.drawState, drawState ) );
+
+			if ( covered === true ) {
+
+				// the in-flight candidate already covers this state — keep it valid
+
+				pending.version = this.generationVersion;
+
+				return;
+
+			}
+
+			// superseded — release the previous candidate
+
+			if ( pending.task !== null ) {
+
+				pending.task.removeOwner( this );
+
+			} else {
+
+				renderer._objects.releaseGeneration( pending, 'stale' );
+
+			}
+
+			this.pending = null;
+
+		}
+
+		if ( this.active !== null && this.active.cacheKey === cacheKey &&
+			( force === false || drawStateEquals( this.active.drawState, drawState ) ) ) {
+
+			// reverted to the active state before the pending build finished
+
+			return;
+
+		}
+
+		if ( dropActive === true && this.active !== null ) {
+
+			// the active pipeline's vertex layout no longer matches the
+			// geometry; skip drawing until the replacement is ready
+
+			this.active.status = 'stale';
+			this.active = null;
+			this.drawState = null;
+
+		}
+
+		if ( scheduler.isFailed( cacheKey ) === true ) return; // known-broken key — keep last
+
+		const generation = new RenderGeneration( cacheKey, this.generationVersion );
+
+		generation.drawState = drawState;
+		generation.dynamicCacheKey = this.initialNodesCacheKey;
+
+		// visible objects without an active generation compile first;
+		// compileAsync prewarming always joins at normal priority
+
+		const priority = ( renderer._compilationTasks === null && this.active === null ) ? WorkTask.HIGH : WorkTask.NORMAL;
+
+		// join existing work for this key or create it — always use the returned task
+
+		const task = scheduler.add( new RenderGenerationTask( renderer, cacheKey, priority ) );
+
+		task.join( this, generation );
+
+		this.pending = generation;
+
+	}
+
+	/**
+	 * Promotes the given candidate generation to the active one. Called only
+	 * from the scheduler's promotion queue at a top-level safe point, while
+	 * no pass or encoder is active.
+	 *
+	 * Promotion validates the candidate, swaps the active state atomically,
+	 * updates the per-material classification snapshot, invalidates affected
+	 * render bundles and defers the release of the previously owned resources
+	 * to a low-priority cleanup task.
+	 *
+	 * @param {RenderGeneration} candidate - The candidate generation.
+	 * @return {boolean} Whether the candidate was promoted or not.
+	 */
+	promote( candidate ) {
+
+		const renderer = this.renderer;
+
+		if ( candidate !== this.pending || candidate.version !== this.generationVersion || candidate.status !== 'promotable' ) {
+
+			// stale, superseded or invalid — release and drop
+
+			renderer._objects.releaseGeneration( candidate, 'stale' );
+
+			if ( this.pending === candidate ) this.pending = null;
+
+			return false;
+
+		}
+
+		const previous = this.active;
+
+		// transfer ownership of the candidate's resources to this render
+		// object and capture the previously owned resources for cleanup
+
+		const previousNodeData = renderer._nodes.applyGeneration( this, candidate );
+		const previousPipeline = renderer._pipelines.applyGeneration( this, candidate );
+		const previousBindings = this._bindings;
+
+		renderer._bindings.applyGeneration( this, candidate );
+
+		this._nodeBuilderState = candidate.nodeBuilderState;
+		this._bindings = candidate.bindings;
+		this._monitor = null;
+
+		this.attributes = candidate.attributes;
+		this.vertexBuffers = candidate.vertexBuffers;
+		this.attributesId = candidate.attributesId;
+
+		this.drawState = candidate.drawState;
+
+		// prime the structural change detector from the promoted snapshot so
+		// live mutations made during the build are still detected
+
+		renderer.backend.syncRenderUpdateState( this, candidate.drawState );
+
+		// classification follows the promoted truth from the next render list
+		// on — captured here, at the safe point, outside the renderer's
+		// temporary pass-related side mutations
+
+		renderer._objects.updateClassification( this.material );
+
+		// bundles encoding this object must re-record
+
+		if ( this.bundle !== null ) this.bundle.needsUpdate = true;
+
+		if ( previous !== null ) previous.status = 'stale';
+
+		candidate.status = 'active';
+		candidate.task = null;
+
+		this.active = candidate;
+		this.pending = null;
+
+		// expensive disposal of the replaced resources is deferred scheduler work
+
+		if ( previousNodeData !== null || previousPipeline !== null || previousBindings !== null ) {
+
+			renderer._scheduler.cleanup( () => {
+
+				if ( previousNodeData !== null ) renderer._nodes.releaseBuilderState( previousNodeData.cacheKey, previousNodeData.state );
+				if ( previousPipeline !== null ) renderer._pipelines.releaseGenerationPipeline( previousPipeline );
+				if ( previousBindings !== null ) renderer._bindings.destroyForGeneration( previousBindings );
+
+			} );
+
+		}
+
+		return true;
+
+	}
+
+	/**
 	 * Frees internal resources.
 	 */
 	dispose() {
+
+		// release background generations
+
+		if ( this.pending !== null ) {
+
+			const pending = this.pending;
+
+			if ( pending.task !== null ) {
+
+				pending.task.removeOwner( this );
+
+			} else {
+
+				this.renderer._objects.releaseGeneration( pending, 'disposed' );
+
+			}
+
+			this.pending = null;
+
+		}
+
+		if ( this.active !== null ) {
+
+			// active resources are owned by this render object and released
+			// through the regular dispose path below
+
+			this.active.status = 'disposed';
+			this.active = null;
+
+		}
 
 		this.material.removeEventListener( 'dispose', this.onMaterialDispose );
 		this.geometry.removeEventListener( 'dispose', this.onGeometryDispose );
