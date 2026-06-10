@@ -1,7 +1,6 @@
 import DataMap from '../DataMap.js';
 import ChainMap from '../ChainMap.js';
 import NodeBuilderState from './NodeBuilderState.js';
-import MainThreadNodeCompiler from './MainThreadNodeCompiler.js';
 import NodeMaterial from '../../../materials/nodes/NodeMaterial.js';
 import { cubeMapNode } from '../../../nodes/utils/CubeMapNode.js';
 import { NodeFrame, StackTrace } from '../../../nodes/Nodes.js';
@@ -79,15 +78,6 @@ class NodeManager extends DataMap {
 		 * @type {ChainMap}
 		 */
 		this.groupsData = new ChainMap();
-
-		/**
-		 * The cooperative main-thread node compiler, lazily created. Used by
-		 * async compilation mode as the universal fallback compiler.
-		 *
-		 * @private
-		 * @type {?MainThreadNodeCompiler}
-		 */
-		this._mainThreadCompiler = null;
 
 		/**
 		 * A cache for managing node objects of
@@ -219,9 +209,7 @@ class NodeManager extends DataMap {
 
 				}
 
-				nodeBuilderState = this._createNodeBuilderState( nodeBuilder );
-
-				nodeBuilderCache.set( cacheKey, nodeBuilderState );
+				nodeBuilderState = this.adoptNodeBuilder( cacheKey, nodeBuilder );
 
 			}
 
@@ -237,43 +225,15 @@ class NodeManager extends DataMap {
 	}
 
 	/**
-	 * Returns the cached node builder state for the given structural cache
-	 * key, or `null`. Used by background generation tasks to join already
-	 * compiled work.
-	 *
-	 * @param {number} cacheKey - The structural cache key.
-	 * @return {?NodeBuilderState} The node builder state, or `null`.
-	 */
-	getCachedBuilderState( cacheKey ) {
-
-		const nodeBuilderState = this.nodeBuilderCache.get( cacheKey );
-
-		return nodeBuilderState !== undefined ? nodeBuilderState : null;
-
-	}
-
-	/**
-	 * Creates a node builder for a background generation build.
-	 *
-	 * @param {RenderObject} renderObject - The representative render object.
-	 * @return {NodeBuilder} The configured node builder.
-	 */
-	createBuilderForGeneration( renderObject ) {
-
-		return this._createNodeBuilder( renderObject, renderObject.material );
-
-	}
-
-	/**
-	 * Creates a node builder state from a finished background build and
-	 * enters it into the cache under the given key, joining an existing
-	 * entry if one appeared meanwhile.
+	 * Creates a node builder state from a finished build and enters it into
+	 * the cache under the given key, joining an existing entry if one
+	 * appeared meanwhile.
 	 *
 	 * @param {number} cacheKey - The structural cache key.
 	 * @param {NodeBuilder} nodeBuilder - The finished node builder.
 	 * @return {NodeBuilderState} The node builder state.
 	 */
-	adoptBuilderForGeneration( cacheKey, nodeBuilder ) {
+	adoptNodeBuilder( cacheKey, nodeBuilder ) {
 
 		let nodeBuilderState = this.nodeBuilderCache.get( cacheKey );
 
@@ -330,28 +290,6 @@ class NodeManager extends DataMap {
 		if ( previousState === undefined || previousState === null ) return null;
 
 		return { state: previousState, cacheKey: previousKey !== undefined ? previousKey : renderObject.initialCacheKey };
-
-	}
-
-	/**
-	 * Returns the compiler for the given render object's background build.
-	 * The worker compiler is used for supported builds; the cooperative
-	 * main-thread compiler is the universal fallback.
-	 *
-	 * @param {RenderObject} renderObject - The render object.
-	 * @return {NodeCompiler} The compiler.
-	 */
-	getCompiler( /* renderObject */ ) {
-
-		let compiler = this._mainThreadCompiler;
-
-		if ( compiler === null ) {
-
-			compiler = this._mainThreadCompiler = new MainThreadNodeCompiler( this );
-
-		}
-
-		return compiler;
 
 	}
 

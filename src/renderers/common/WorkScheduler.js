@@ -1,14 +1,8 @@
 import WorkTask from './WorkTask.js';
 import { error } from '../../utils.js';
 
-/**
- * The maximum number of structural cache keys remembered as failed.
- * Bounds the failure cache so procedural key generators cannot grow
- * it without bound.
- *
- * @private
- * @type {number}
- */
+// bounds the failure cache so procedural key generators cannot grow it without bound
+
 const FAILED_KEYS_LIMIT = 256;
 
 let _cleanupId = 0;
@@ -23,11 +17,6 @@ let _cleanupId = 0;
  */
 class CleanupTask extends WorkTask {
 
-	/**
-	 * Constructs a new cleanup task.
-	 *
-	 * @param {Function} fn - The cleanup function.
-	 */
 	constructor( fn ) {
 
 		super( 'cleanup:' + ( _cleanupId ++ ), WorkTask.LOW );
@@ -48,12 +37,10 @@ class CleanupTask extends WorkTask {
 }
 
 /**
- * Coordinates all deferred renderer work: node builds, worker requests,
- * pipeline creation, hydration, uploads and safe-point promotion.
- *
- * The scheduler owns three priority queues, an in-flight set, named gates
- * with waiter lists, a promotion queue and one main-thread time budget.
- * It is deliberately small; work-specific complexity lives in tasks.
+ * Coordinates all deferred renderer work: node builds, pipeline creation
+ * and safe-point promotion. The scheduler owns three priority queues, an
+ * in-flight set, named gates with waiter lists, a promotion queue and one
+ * main-thread time budget.
  *
  * @private
  */
@@ -126,41 +113,29 @@ class WorkScheduler {
 		this.timeBudget = 2;
 
 		/**
-		 * The maximum number of in-flight worker and upload requests.
-		 * GPU pipeline creation is exempt, see `maxPipelinesInFlight`.
-		 *
-		 * @type {number}
-		 */
-		this.maxInFlight = 4;
-
-		/**
 		 * The maximum number of asynchronous GPU pipelines awaiting completion.
+		 * Pipeline creation runs on browser-internal threads and therefore has
+		 * its own generous cap.
 		 *
 		 * @type {number}
 		 */
 		this.maxPipelinesInFlight = 32;
 
 		/**
-		 * Lifetime statistics, mirrored into `renderer.info.asyncCompilation`.
+		 * Scheduler statistics, see `Info#asyncCompilation` which this property
+		 * references when a renderer is set.
 		 *
 		 * @type {Object}
 		 */
-		this.stats = {
+		this.stats = renderer !== null ? renderer.info.asyncCompilation : {
+			queued: 0,
+			blocked: 0,
+			inFlight: 0,
+			pipelines: 0,
 			promotions: 0,
 			failed: 0,
-			fallbacks: 0,
-			workerTime: 0,
-			mainThreadTime: 0,
-			pendingBytes: 0
+			mainThreadTime: 0
 		};
-
-		/**
-		 * The number of in-flight worker/upload requests holding a capacity slot.
-		 *
-		 * @private
-		 * @type {number}
-		 */
-		this._workInFlight = 0;
 
 		/**
 		 * The number of asynchronous GPU pipelines awaiting completion.
@@ -169,14 +144,6 @@ class WorkScheduler {
 		 * @type {number}
 		 */
 		this._pipelinesInFlight = 0;
-
-		/**
-		 * The number of tasks parked on gates.
-		 *
-		 * @private
-		 * @type {number}
-		 */
-		this._blockedCount = 0;
 
 		/**
 		 * Whether a service callback has been scheduled.
@@ -196,28 +163,13 @@ class WorkScheduler {
 		this._notifyRequested = false;
 
 		/**
-		 * Handle of the scheduled idle callback, if any.
+		 * Handles of the scheduled service callbacks, if any.
 		 *
 		 * @private
 		 * @type {?number}
 		 */
 		this._idleHandle = null;
-
-		/**
-		 * Handle of the scheduled timeout, if any.
-		 *
-		 * @private
-		 * @type {?number}
-		 */
 		this._timeoutHandle = null;
-
-		/**
-		 * The info target object, see `attachInfo()`.
-		 *
-		 * @private
-		 * @type {?Object}
-		 */
-		this._info = null;
 
 		/**
 		 * Bound service callback.
@@ -254,29 +206,17 @@ class WorkScheduler {
 	}
 
 	/**
-	 * Returns the active task for the given key, if any.
-	 *
-	 * @param {string|number} key - The task key.
-	 * @return {?WorkTask} The task, or `null`.
-	 */
-	get( key ) {
-
-		const task = this.tasks.get( key );
-
-		return ( task !== undefined && task.isTerminal() === false ) ? task : null;
-
-	}
-
-	/**
 	 * Runs one budgeted slice. Each runnable task runs at most once per
 	 * slice, so no task can starve the others within a slice.
 	 */
 	update() {
 
+		let remaining = this._runnableCount();
+
+		if ( remaining === 0 ) return;
+
 		const start = performance.now();
 		const deadline = start + this.timeBudget;
-
-		let remaining = this._runnableCount();
 
 		while ( remaining -- > 0 && performance.now() < deadline ) {
 
@@ -303,7 +243,6 @@ class WorkScheduler {
 
 			} else if ( result === WorkTask.WAIT ) {
 
-				task.status = 'waiting';
 				this.inFlight.add( task );
 
 			} else if ( result === WorkTask.BLOCKED ) {
@@ -336,12 +275,10 @@ class WorkScheduler {
 	resume( task ) {
 
 		this.inFlight.delete( task );
-		this.releaseInFlightSlot( task );
 
 		if ( task.isTerminal() === true ) {
 
-			// the task settled while in flight (cancellation, disposal, device
-			// loss) — reap it so held gates and slots are released
+			// the task settled while in flight — reap it so a held gate is released
 
 			this._finish( task );
 
@@ -358,9 +295,7 @@ class WorkScheduler {
 
 	/**
 	 * Requeues a non-terminal task so newly joined work is processed. Unlike
-	 * `resume()`, this does not release in-flight slots — the task may still
-	 * have an asynchronous request outstanding. Parked tasks are left to
-	 * their gate.
+	 * `resume()`, parked tasks are left to their gate.
 	 *
 	 * @param {WorkTask} task - The task to poke.
 	 */
@@ -376,7 +311,7 @@ class WorkScheduler {
 	/**
 	 * Escalates the priority of an existing task, e.g. when a prioritized
 	 * render object joins work that was queued at a lower priority. Tasks
-	 * are never demoted — the priority of a shared task is the highest of
+	 * are never demoted — the priority of shared work is the highest of
 	 * its owners.
 	 *
 	 * @param {WorkTask} task - The task to escalate.
@@ -429,7 +364,7 @@ class WorkScheduler {
 		if ( gate.held === null || gate.held === task ) {
 
 			gate.held = task;
-			task.heldGates.add( name );
+			task.heldGate = name;
 
 			return true;
 
@@ -456,7 +391,7 @@ class WorkScheduler {
 
 		if ( gate.held !== null ) {
 
-			gate.held.heldGates.delete( name );
+			gate.held.heldGate = null;
 			gate.held = null;
 
 		}
@@ -474,7 +409,6 @@ class WorkScheduler {
 				// settled while parked — reap
 
 				waiters.splice( i, 1 );
-				this._blockedCount --;
 				this._finish( waiter );
 
 				i --;
@@ -491,10 +425,7 @@ class WorkScheduler {
 
 			const waiter = waiters.splice( best, 1 )[ 0 ];
 
-			this._blockedCount --;
-
 			waiter.gate = null;
-			waiter.status = 'queued';
 
 			this._enqueue( waiter );
 			this.requestUpdate();
@@ -504,54 +435,7 @@ class WorkScheduler {
 	}
 
 	/**
-	 * Attempts to acquire an in-flight capacity slot (worker and upload
-	 * requests). If capacity is exhausted, the task's `gate` property is set
-	 * so a subsequent `BLOCKED` result parks it on the capacity gate.
-	 *
-	 * @param {WorkTask} task - The acquiring task.
-	 * @return {boolean} Whether a slot was acquired or not.
-	 */
-	requestInFlightSlot( task ) {
-
-		if ( task._holdsWorkSlot === true ) return true;
-
-		if ( this._workInFlight >= this.maxInFlight ) {
-
-			task.gate = 'capacity';
-
-			return false;
-
-		}
-
-		this._workInFlight ++;
-		task._holdsWorkSlot = true;
-
-		return true;
-
-	}
-
-	/**
-	 * Releases the in-flight capacity slot held by the given task, if any,
-	 * and wakes a capacity waiter.
-	 *
-	 * @param {WorkTask} task - The task.
-	 */
-	releaseInFlightSlot( task ) {
-
-		if ( task._holdsWorkSlot !== true ) return;
-
-		task._holdsWorkSlot = false;
-		this._workInFlight --;
-
-		this.release( 'capacity' );
-
-	}
-
-	/**
-	 * Attempts to acquire an asynchronous pipeline slot. Pipeline creation
-	 * runs on browser-internal threads and therefore has its own, more
-	 * generous cap (see `maxPipelinesInFlight`) and does not consume
-	 * worker/upload capacity.
+	 * Attempts to acquire an asynchronous pipeline slot.
 	 *
 	 * @param {?WorkTask} [task=null] - The acquiring task, for gate parking.
 	 * @return {boolean} Whether a slot was acquired or not.
@@ -611,8 +495,7 @@ class WorkScheduler {
 
 	/**
 	 * Applies queued promotions. Called only from the renderer at the
-	 * top-level safe point. Promotion is validate + swap + enqueue cleanup;
-	 * expensive disposal becomes new scheduler work.
+	 * top-level safe point.
 	 */
 	applyPromotions() {
 
@@ -709,7 +592,7 @@ class WorkScheduler {
 
 	/**
 	 * Settles all tasks, clears all queues, gates and promotions. Used on
-	 * device loss and disposal. Settled waiters are notified.
+	 * device loss and disposal.
 	 *
 	 * @param {string} [status='cancelled'] - The terminal status to settle tasks with.
 	 */
@@ -731,9 +614,7 @@ class WorkScheduler {
 
 		this.promotions.length = 0;
 
-		this._workInFlight = 0;
 		this._pipelinesInFlight = 0;
-		this._blockedCount = 0;
 		this._notifyRequested = false;
 
 		this._cancelServiceCallback();
@@ -749,20 +630,6 @@ class WorkScheduler {
 		this.settleAll( 'disposed' );
 
 		this.failedKeys.clear();
-
-	}
-
-	/**
-	 * Attaches an info object whose properties are kept in sync with the
-	 * scheduler state, see `Renderer.info.asyncCompilation`.
-	 *
-	 * @param {Object} info - The info target object.
-	 */
-	attachInfo( info ) {
-
-		this._info = info;
-
-		this._syncInfo();
 
 	}
 
@@ -873,7 +740,6 @@ class WorkScheduler {
 
 				const task = queue.shift();
 				task.queued = false;
-				task.status = 'running';
 
 				return task;
 
@@ -930,13 +796,11 @@ class WorkScheduler {
 		task.status = 'blocked';
 		gate.waiters.push( task );
 
-		this._blockedCount ++;
-
 	}
 
 	/**
-	 * Finishes a task: releases held gates and slots, removes it from the
-	 * registry and records failures.
+	 * Finishes a task: releases a held gate, removes it from the registry
+	 * and records failures.
 	 *
 	 * @private
 	 * @param {WorkTask} task - The task to finish.
@@ -950,13 +814,8 @@ class WorkScheduler {
 
 		if ( task.isTerminal() === false ) task.settle( 'ready' );
 
-		for ( const name of task.heldGates ) {
+		if ( task.heldGate !== null ) this.release( task.heldGate );
 
-			this.release( name );
-
-		}
-
-		this.releaseInFlightSlot( task );
 		this.inFlight.delete( task );
 
 		if ( this.tasks.get( task.key ) === task ) this.tasks.delete( task.key );
@@ -964,35 +823,33 @@ class WorkScheduler {
 		if ( task.status === 'failed' ) {
 
 			this.stats.failed ++;
-			this.rememberFailure( task.failureKey );
+			this.rememberFailure( task.key );
 
 		}
 
 	}
 
 	/**
-	 * Mirrors scheduler state into the attached info object.
+	 * Updates the statistics gauges.
 	 *
 	 * @private
 	 */
 	_syncInfo() {
 
-		const info = this._info;
-
-		if ( info === null ) return;
-
 		const stats = this.stats;
 
-		info.queued = this._runnableCount();
-		info.blocked = this._blockedCount;
-		info.inFlight = this.inFlight.size;
-		info.pipelines = this._pipelinesInFlight;
-		info.promotions = stats.promotions;
-		info.failed = stats.failed;
-		info.fallbacks = stats.fallbacks;
-		info.workerTime = stats.workerTime;
-		info.mainThreadTime = stats.mainThreadTime;
-		info.pendingBytes = stats.pendingBytes;
+		let blocked = 0;
+
+		for ( const gate of this.gates.values() ) {
+
+			blocked += gate.waiters.length;
+
+		}
+
+		stats.queued = this._runnableCount();
+		stats.blocked = blocked;
+		stats.inFlight = this.inFlight.size;
+		stats.pipelines = this._pipelinesInFlight;
 
 	}
 

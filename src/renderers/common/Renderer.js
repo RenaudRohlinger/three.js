@@ -861,12 +861,11 @@ class Renderer {
 			this._pipelines = new Pipelines( backend, this._nodes, this.info );
 			this._bindings = new Bindings( backend, this._nodes, this._textures, this._attributes, this._pipelines, this.info );
 			this._objects = new RenderObjects( this, this._nodes, this._geometries, this._pipelines, this._bindings, this.info );
-			this._renderLists = new RenderLists( this.lighting );
+			this._renderLists = new RenderLists( this.lighting, this._asyncCompilation === true ? this._objects : null );
 			this._bundles = new RenderBundles();
 			this._renderContexts = new RenderContexts( this );
 
 			this._scheduler = new WorkScheduler( this );
-			this._scheduler.attachInfo( this.info.asyncCompilation );
 
 			//
 
@@ -1075,10 +1074,8 @@ class Renderer {
 		this._handleObjectFunction = previousHandleObjectFunction;
 		this._compilationTasks = previousCompilationTasks;
 
-		// snapshot semantics: resolve when the generations discovered at call
-		// time are ready, failed or stale — later mutations don't extend the
-		// promise. Resolution does not force promotion; promotable
-		// generations are applied at the next top-level render safe point.
+		// resolve when the generations discovered at call time have settled —
+		// later mutations don't extend the promise
 
 		if ( compilationTasks.length > 0 ) {
 
@@ -1556,9 +1553,8 @@ class Renderer {
 
 		if ( this._isDeviceLost === true ) return;
 
-		// safe point: apply queued generation promotions at the entry of a
-		// top-level render call, before render-list construction, while no
-		// pass or encoder is active — nested renders never promote
+		// safe point: promotions are applied only at the entry of a top-level
+		// render call — nested renders never promote
 
 		if ( this._scheduler !== null && this._callDepth === - 1 ) {
 
@@ -1636,7 +1632,7 @@ class Renderer {
 
 		this._currentRenderContext = renderContext;
 		this._currentRenderObjectFunction = this._renderObjectFunction || this.renderObject;
-		this._handleObjectFunction = this._asyncCompilation === true ? this._renderObjectAsync : this._renderObjectDirect;
+		this._handleObjectFunction = this._renderObjectDirect;
 
 		//
 
@@ -3159,9 +3155,7 @@ class Renderer {
 
 					if ( material.visible ) {
 
-						const classification = this._asyncCompilation === true ? this._objects.getClassification( material ) : null;
-
-						renderList.push( object, geometry, material, groupOrder, _vector4.z, null, clippingContext, classification );
+						renderList.push( object, geometry, material, groupOrder, _vector4.z, null, clippingContext );
 
 					}
 
@@ -3201,9 +3195,7 @@ class Renderer {
 
 							if ( groupMaterial && groupMaterial.visible ) {
 
-								const classification = this._asyncCompilation === true ? this._objects.getClassification( groupMaterial ) : null;
-
-								renderList.push( object, geometry, groupMaterial, groupOrder, _vector4.z, group, clippingContext, classification );
+								renderList.push( object, geometry, groupMaterial, groupOrder, _vector4.z, group, clippingContext );
 
 							}
 
@@ -3211,9 +3203,7 @@ class Renderer {
 
 					} else if ( material.visible ) {
 
-						const classification = this._asyncCompilation === true ? this._objects.getClassification( material ) : null;
-
-						renderList.push( object, geometry, material, groupOrder, _vector4.z, null, clippingContext, classification );
+						renderList.push( object, geometry, material, groupOrder, _vector4.z, null, clippingContext );
 
 					}
 
@@ -3682,6 +3672,11 @@ class Renderer {
 	 * This method represents the default `_handleObjectFunction` implementation which creates
 	 * a render object from the given data and performs the draw command with the selected backend.
 	 *
+	 * In async compilation mode the render loop never performs node building or
+	 * pipeline creation: structural changes request a background generation and
+	 * the render object keeps drawing its active one; objects without an active
+	 * generation are skipped until their first generation promotes.
+	 *
 	 * @private
 	 * @param {Object3D} object - The 3D object.
 	 * @param {Material} material - The object's material.
@@ -3710,83 +3705,22 @@ class Renderer {
 
 		//
 
-		const needsRefresh = this._nodes.needsRefresh( renderObject );
+		if ( this._asyncCompilation === true ) {
 
-		if ( needsRefresh ) {
+			// live structural mutations that do not bump the material version
+			// (e.g. blend mode values) request a replacement generation
 
-			this._nodes.updateBefore( renderObject );
+			if ( renderObject.active !== null && this.backend.detectStructuralChange( renderObject ) === true ) {
 
-			this._geometries.updateForRender( renderObject );
+				renderObject.requestGeneration( renderObject.getCacheKey(), false, true );
 
-			this._nodes.updateForRender( renderObject );
-			this._bindings.updateForRender( renderObject );
+			}
 
-		}
+			// no active generation yet — skip until promoted
 
-		this._pipelines.updateForRender( renderObject );
-
-		//
-
-		if ( this._pipelines.isReady( renderObject ) ) {
-
-			this.backend.draw( renderObject, this.info );
-
-			if ( needsRefresh ) this._nodes.updateAfter( renderObject );
+			if ( renderObject.active === null ) return;
 
 		}
-
-	}
-
-	/**
-	 * The `_handleObjectFunction` implementation of async compilation mode.
-	 *
-	 * Unchanged objects draw their active generation with zero new work.
-	 * Changed objects request a background generation and keep drawing their
-	 * active one. New objects request a background generation and are
-	 * skipped until their first generation promotes. The render loop never
-	 * performs unbounded node building or synchronous pipeline creation.
-	 *
-	 * @private
-	 * @param {Object3D} object - The 3D object.
-	 * @param {Material} material - The object's material.
-	 * @param {Scene} scene - The scene the 3D object belongs to.
-	 * @param {Camera} camera - The camera the object should be rendered with.
-	 * @param {LightsNode} lightsNode - The current lights node.
-	 * @param {?{start: number, count: number}} group - Only relevant for objects using multiple materials. This represents a group entry from the respective `BufferGeometry`.
-	 * @param {ClippingContext} clippingContext - The clipping context.
-	 * @param {string} [passId] - An optional ID for identifying the pass.
-	 */
-	_renderObjectAsync( object, material, scene, camera, lightsNode, group, clippingContext, passId ) {
-
-		const renderObject = this._objects.get( object, material, scene, camera, lightsNode, this._currentRenderContext, clippingContext, passId );
-		renderObject.drawRange = object.geometry.drawRange;
-		renderObject.group = group;
-
-		if ( this._currentRenderBundle !== null ) {
-
-			const renderBundleData = this.backend.get( this._currentRenderBundle );
-
-			renderBundleData.renderObjects.push( renderObject );
-
-			renderObject.bundle = this._currentRenderBundle.bundleGroup;
-
-		}
-
-		// detect live structural mutations that do not bump the material
-		// version (e.g. blend mode values) — they request a replacement
-		// generation instead of mutating the active one
-
-		if ( renderObject.active !== null && this.backend.detectStructuralChange( renderObject ) === true ) {
-
-			renderObject.requestGeneration( renderObject.getCacheKey(), false, true );
-
-		}
-
-		// the draw gate: no active generation means the object is skipped
-		// until its first generation promotes — it pops in like a loading
-		// texture
-
-		if ( renderObject.active === null ) return;
 
 		//
 
@@ -3803,7 +3737,15 @@ class Renderer {
 
 		}
 
-		// no pipeline update: the pipeline belongs to the promoted generation
+		// in async compilation mode the pipeline belongs to the promoted generation
+
+		if ( this._asyncCompilation === false ) {
+
+			this._pipelines.updateForRender( renderObject );
+
+			if ( this._pipelines.isReady( renderObject ) === false ) return;
+
+		}
 
 		this.backend.draw( renderObject, this.info );
 

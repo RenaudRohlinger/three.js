@@ -6,9 +6,6 @@
  * (asynchronous work in flight, `scheduler.resume()` will requeue), `BLOCKED`
  * (cannot progress until a named gate is released) or `DONE` (terminal).
  *
- * Tasks are owned by one or more owners (e.g. render objects). When the last
- * owner is removed, the task cancels itself.
- *
  * @private
  */
 class WorkTask {
@@ -29,16 +26,6 @@ class WorkTask {
 		this.key = key;
 
 		/**
-		 * The key recorded in the scheduler's failure cache when this task
-		 * fails. Defaults to the task key; tasks can set a semantic key
-		 * (e.g. the structural cache key) so request sites can consult the
-		 * cache directly.
-		 *
-		 * @type {string|number}
-		 */
-		this.failureKey = key;
-
-		/**
 		 * The task priority. One of `WorkTask.HIGH`, `WorkTask.NORMAL`, `WorkTask.LOW`.
 		 *
 		 * @type {number}
@@ -46,21 +33,29 @@ class WorkTask {
 		this.priority = priority;
 
 		/**
-		 * The task status. Non-terminal statuses are `'queued'`, `'running'`,
-		 * `'waiting'` and `'blocked'`. Terminal statuses are `'ready'`, `'failed'`,
-		 * `'stale'`, `'cancelled'` and `'disposed'`.
+		 * The task status. `'queued'` or `'blocked'` while pending; terminal
+		 * statuses are `'ready'`, `'failed'`, `'stale'`, `'cancelled'` and
+		 * `'disposed'`.
 		 *
 		 * @type {string}
 		 */
 		this.status = 'queued';
 
 		/**
-		 * When the task reports `BLOCKED`, this property must name the gate the
-		 * task is parked on.
+		 * When the task reports `BLOCKED`, this property must name the gate
+		 * the task is parked on.
 		 *
 		 * @type {?string}
 		 */
 		this.gate = null;
+
+		/**
+		 * The name of the gate this task currently holds, released when the
+		 * task finishes.
+		 *
+		 * @type {?string}
+		 */
+		this.heldGate = null;
 
 		/**
 		 * The error that settled this task, if any.
@@ -70,14 +65,6 @@ class WorkTask {
 		this.error = null;
 
 		/**
-		 * The owners of this task. When the last owner is removed, the task
-		 * cancels itself.
-		 *
-		 * @type {Set<Object>}
-		 */
-		this.owners = new Set();
-
-		/**
 		 * The scheduler this task belongs to. Assigned by `WorkScheduler.add()`.
 		 *
 		 * @type {?WorkScheduler}
@@ -85,16 +72,7 @@ class WorkTask {
 		this.scheduler = null;
 
 		/**
-		 * The names of the gates this task currently holds. Held gates are
-		 * released when the task finishes.
-		 *
-		 * @type {Set<string>}
-		 */
-		this.heldGates = new Set();
-
-		/**
-		 * Whether the task is currently enqueued in a scheduler queue. Used to
-		 * keep `_enqueue()` idempotent.
+		 * Whether the task is currently enqueued, keeping `_enqueue()` idempotent.
 		 *
 		 * @type {boolean}
 		 */
@@ -112,8 +90,7 @@ class WorkTask {
 
 	/**
 	 * Advances the task. Every operation inside `run()` must be incremental or
-	 * measured bounded. Wrapping one large synchronous call in a task does not
-	 * make it non-blocking.
+	 * measured bounded.
 	 *
 	 * @abstract
 	 * @param {number} deadline - Absolute `performance.now()` deadline.
@@ -122,31 +99,6 @@ class WorkTask {
 	run( /* deadline */ ) {
 
 		return WorkTask.DONE;
-
-	}
-
-	/**
-	 * Adds an owner to this task.
-	 *
-	 * @param {Object} owner - The owner.
-	 */
-	addOwner( owner ) {
-
-		this.owners.add( owner );
-
-	}
-
-	/**
-	 * Removes an owner from this task. When the last owner is removed, the
-	 * task cancels itself.
-	 *
-	 * @param {Object} owner - The owner.
-	 */
-	removeOwner( owner ) {
-
-		this.owners.delete( owner );
-
-		if ( this.owners.size === 0 ) this.cancel();
 
 	}
 

@@ -428,6 +428,19 @@ class RenderObject {
 	}
 
 	/**
+	 * The material state structural values are read from at encode time: the
+	 * promoted draw snapshot when present, otherwise the live material.
+	 *
+	 * @type {Material|Object}
+	 * @readonly
+	 */
+	get drawMaterial() {
+
+		return this.drawState !== null ? this.drawState : this.material;
+
+	}
+
+	/**
 	 * Returns the node builder state of this render object.
 	 *
 	 * @return {NodeBuilderState} The node builder state.
@@ -641,7 +654,7 @@ class RenderObject {
 	 */
 	getDrawParameters() {
 
-		const { object, material, geometry, group, drawRange } = this;
+		const { object, geometry, group, drawRange } = this;
 
 		const drawParams = this.drawParams || ( this.drawParams = {
 			vertexCount: 0,
@@ -673,9 +686,7 @@ class RenderObject {
 
 		let rangeFactor = 1;
 
-		const wireframe = this.drawState !== null ? this.drawState.wireframe : material.wireframe;
-
-		if ( wireframe === true && ! object.isPoints && ! object.isLineSegments && ! object.isLine && ! object.isLineLoop ) {
+		if ( this.drawMaterial.wireframe === true && ! object.isPoints && ! object.isLineSegments && ! object.isLine && ! object.isLineLoop ) {
 
 			rangeFactor = 2;
 
@@ -1027,10 +1038,8 @@ class RenderObject {
 
 		if ( pending !== null ) {
 
-			const covered = pending.cacheKey === cacheKey && pending.isTerminal() === false &&
-				( force === false || drawStateEquals( pending.drawState, drawState ) );
-
-			if ( covered === true ) {
+			if ( pending.cacheKey === cacheKey && pending.isTerminal() === false &&
+				( force === false || drawStateEquals( pending.drawState, drawState ) ) ) {
 
 				// the in-flight candidate already covers this state — keep it valid
 
@@ -1040,19 +1049,7 @@ class RenderObject {
 
 			}
 
-			// superseded — release the previous candidate
-
-			if ( pending.task !== null ) {
-
-				pending.task.removeOwner( this );
-
-			} else {
-
-				renderer._objects.releaseGeneration( pending, 'stale' );
-
-			}
-
-			this.pending = null;
+			this._releasePending( 'stale' );
 
 		}
 
@@ -1081,13 +1078,10 @@ class RenderObject {
 		const generation = new RenderGeneration( cacheKey, this.generationVersion );
 
 		generation.drawState = drawState;
-		generation.dynamicCacheKey = this.initialNodesCacheKey;
 
-		// the application hint wins (object first, then material): positive
-		// values compile ahead of all automatic replacement work, negative
-		// values compile after it. Otherwise visible objects without an
-		// active generation compile first and compileAsync prewarming joins
-		// at normal priority.
+		// application hint first (positive ahead of all replacement work,
+		// negative after it); otherwise visible objects without an active
+		// generation compile first and compileAsync joins at normal priority
 
 		const compilePriority = this.object.compilePriority !== undefined ? this.object.compilePriority :
 			( this.material.compilePriority !== undefined ? this.material.compilePriority : 0 );
@@ -1108,17 +1102,42 @@ class RenderObject {
 
 		}
 
-		// join existing work for this key or create it — always use the returned task
+		// join existing work for this key or create it — always use the returned
+		// task; shared work runs at the highest priority of its owners
 
 		const task = scheduler.add( new RenderGenerationTask( renderer, cacheKey, priority ) );
-
-		// shared work runs at the highest priority of its owners
 
 		if ( priority < task.priority ) scheduler.reprioritize( task, priority );
 
 		task.join( this, generation );
 
 		this.pending = generation;
+
+	}
+
+	/**
+	 * Releases the pending candidate generation, if any.
+	 *
+	 * @private
+	 * @param {string} status - The terminal status to apply.
+	 */
+	_releasePending( status ) {
+
+		const pending = this.pending;
+
+		if ( pending === null ) return;
+
+		if ( pending.task !== null ) {
+
+			pending.task.removeOwner( this );
+
+		} else {
+
+			this.renderer._objects.releaseGeneration( pending, status );
+
+		}
+
+		this.pending = null;
 
 	}
 
@@ -1160,7 +1179,7 @@ class RenderObject {
 		const previousPipeline = renderer._pipelines.applyGeneration( this, candidate );
 		const previousBindings = this._bindings;
 
-		renderer._bindings.applyGeneration( this, candidate );
+		renderer._bindings.applyGeneration( this );
 
 		this._nodeBuilderState = candidate.nodeBuilderState;
 		this._bindings = candidate.bindings;
@@ -1202,8 +1221,8 @@ class RenderObject {
 			renderer._scheduler.cleanup( () => {
 
 				if ( previousNodeData !== null ) renderer._nodes.releaseBuilderState( previousNodeData.cacheKey, previousNodeData.state );
-				if ( previousPipeline !== null ) renderer._pipelines.releaseGenerationPipeline( previousPipeline );
-				if ( previousBindings !== null ) renderer._bindings.destroyForGeneration( previousBindings );
+				if ( previousPipeline !== null ) renderer._pipelines.releaseRenderPipeline( previousPipeline );
+				if ( previousBindings !== null ) renderer._bindings._destroyBindings( previousBindings );
 
 			} );
 
@@ -1220,23 +1239,7 @@ class RenderObject {
 
 		// release background generations
 
-		if ( this.pending !== null ) {
-
-			const pending = this.pending;
-
-			if ( pending.task !== null ) {
-
-				pending.task.removeOwner( this );
-
-			} else {
-
-				this.renderer._objects.releaseGeneration( pending, 'disposed' );
-
-			}
-
-			this.pending = null;
-
-		}
+		this._releasePending( 'disposed' );
 
 		if ( this.active !== null ) {
 

@@ -1,17 +1,14 @@
 /**
  * Captures every structural material value that is read after render-list
  * construction or during backend encoding into a plain frozen snapshot.
+ * The snapshot mirrors the material property names so it can be passed in
+ * place of the material to state-derivation helpers.
  *
- * This is the property set `WebGPUBackend.needsRenderUpdate()` reads live
- * today, plus the values the pipeline utilities and the draw encoder consume
- * (`wireframe`, `polygonOffset*`, `stencilRef`, label data). The snapshot is
- * captured at request time — during traversal — when pass-dependent state
- * like `material.side` has already been resolved by the renderer (back-side
- * pass, shadow override). Background builds therefore never read these
- * values live.
- *
- * The snapshot deliberately mirrors the material property names so it can be
- * passed in place of the material to state-derivation helpers.
+ * It is captured at request time — during traversal — when pass-dependent
+ * state like `material.side` has already been resolved by the renderer
+ * (back-side pass, shadow override), so background builds never read these
+ * values live. The property set must stay in sync with
+ * `WebGPUBackend._syncStructuralState()` and `getRenderCacheKey()`.
  *
  * @private
  * @param {Material} material - The material to capture.
@@ -102,13 +99,13 @@ export function drawStateEquals( a, b ) {
 }
 
 /**
- * An immutable compiled drawable state. Everything required to issue this
+ * An immutable compiled drawable state — everything required to issue this
  * draw safely, captured at build time. A render object draws only from its
  * promoted (`active`) generation; live material state is never consulted at
  * draw-encoding time for structural values.
  *
- * Generation lifecycle: `requested` → `building` → `promotable` → `active`,
- * or terminal `stale` / `failed` / `disposed`.
+ * Lifecycle: `requested` → `promotable` → `active`, or terminal `stale` /
+ * `failed` / `disposed`.
  *
  * @private
  */
@@ -145,7 +142,7 @@ class RenderGeneration {
 		this.status = 'requested';
 
 		/**
-		 * The hydrated node builder state.
+		 * The node builder state.
 		 *
 		 * @type {?NodeBuilderState}
 		 */
@@ -171,14 +168,6 @@ class RenderGeneration {
 		 * @type {?Object}
 		 */
 		this.drawState = null;
-
-		/**
-		 * The dynamic part of the cache key at request time. Used to sync the
-		 * render object's `initialNodesCacheKey` at promotion.
-		 *
-		 * @type {number}
-		 */
-		this.dynamicCacheKey = 0;
 
 		/**
 		 * The owning build task while pending.
@@ -207,14 +196,6 @@ class RenderGeneration {
 		 * @type {?Object<string,number>}
 		 */
 		this.attributesId = null;
-
-		/**
-		 * The per-owner finalize sub-state used by `RenderGenerationTask`.
-		 *
-		 * @private
-		 * @type {?string}
-		 */
-		this._finalize = null;
 
 	}
 

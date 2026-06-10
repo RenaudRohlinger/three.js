@@ -1,39 +1,8 @@
 import ChainMap from './ChainMap.js';
 import RenderObject from './RenderObject.js';
-import { DoubleSide } from '../../constants.js';
+import { isTransparent, needsDoublePass } from './RenderList.js';
 
 const _chainKeys = [];
-
-/**
- * Returns `true` if the given material classifies as transparent for
- * render-list purposes.
- *
- * @private
- * @param {Material} material - The material.
- * @return {boolean} Whether the material classifies as transparent or not.
- */
-function isTransparent( material ) {
-
-	return material.transparent === true || material.transmission > 0 ||
-		( material.transmissionNode && material.transmissionNode.isNode ) ||
-		( material.backdropNode && material.backdropNode.isNode ) ? true : false;
-
-}
-
-/**
- * Returns `true` if the given transparent material requires a double pass.
- *
- * @private
- * @param {Material} material - The material.
- * @return {boolean} Whether the given material requires a double pass or not.
- */
-function needsDoublePass( material ) {
-
-	const hasTransmission = material.transmission > 0 || ( material.transmissionNode && material.transmissionNode.isNode );
-
-	return hasTransmission && material.side === DoubleSide && material.forceSinglePass === false;
-
-}
 
 /**
  * This module manages the render objects of the renderer.
@@ -179,14 +148,14 @@ class RenderObjects {
 
 		if ( generation.pipeline !== null ) {
 
-			this.pipelines.releaseGenerationPipeline( generation.pipeline );
+			this.pipelines.releaseRenderPipeline( generation.pipeline );
 			generation.pipeline = null;
 
 		}
 
 		if ( generation.bindings !== null ) {
 
-			this.bindings.destroyForGeneration( generation.bindings );
+			this.bindings._destroyBindings( generation.bindings );
 			generation.bindings = null;
 
 		}

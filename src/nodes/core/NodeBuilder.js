@@ -3164,70 +3164,17 @@ class NodeBuilder {
 	 */
 	build() {
 
-		this.prebuild();
-
-		// setup() -> stage 1: create possible new nodes and/or return an output reference node
-		// analyze()   -> stage 2: analyze nodes to possible optimization and validation
-		// generate()  -> stage 3: generate shader
-
-		for ( const buildStage of defaultBuildStages ) {
-
-			this.setBuildStage( buildStage );
-
-			if ( this.context.position && this.context.position.isNode ) {
-
-				this.flowNodeFromShaderStage( 'vertex', this.context.position );
-
-			}
-
-			for ( const shaderStage of shaderStages ) {
-
-				this.setShaderStage( shaderStage );
-
-				const flowNodes = this.flowNodes[ shaderStage ];
-
-				for ( const node of flowNodes ) {
-
-					if ( buildStage === 'generate' ) {
-
-						this.flowNode( node );
-
-					} else {
-
-						node.build( this );
-
-					}
-
-				}
-
-			}
-
-		}
-
-		this.setBuildStage( null );
-		this.setShaderStage( null );
-
-		// stage 4: build code for a specific output
-
-		this.buildCode();
-		this.buildUpdateNodes();
+		this.buildStep( Infinity );
 
 		return this;
 
 	}
 
 	/**
-	 * Incremental, deadline-aware form of `build()`. Advances the build by
-	 * bounded units of work — one flow node at a time — and returns whether
-	 * the build has completed. Call repeatedly until it returns `true`.
-	 *
-	 * A single flow unit (one `node.build()` call tree or the prebuild) is
-	 * not preemptible; the deadline is checked between units, so one large
-	 * unit can overrun the deadline. This is the documented non-preemptible
-	 * floor of cooperative compilation.
-	 *
-	 * The first unit of every call always runs, guaranteeing forward progress
-	 * even when the deadline has already passed on entry.
+	 * Incremental form of `build()`. Advances the build one flow node at a
+	 * time, checking the deadline between units (a single unit is not
+	 * preemptible), and always makes progress even when the deadline has
+	 * already passed on entry. Call repeatedly until it returns `true`.
 	 *
 	 * @param {number} deadline - Absolute `performance.now()` deadline.
 	 * @return {boolean} Whether the build has completed or not.

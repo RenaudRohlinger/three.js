@@ -150,39 +150,13 @@ class Bindings extends DataMap {
 	}
 
 	/**
-	 * Creates the given bind groups for a background generation. Resource
-	 * residency (texture uploads, uniform buffer creation) happens here, in
-	 * a budgeted scheduler task scoped to the pending generation — the
-	 * active generation's bindings are never touched.
-	 *
-	 * @param {Array<BindGroup>} bindings - The generation's bind groups.
-	 */
-	createForGeneration( bindings ) {
-
-		this._createBindings( bindings );
-
-	}
-
-	/**
-	 * Destroys the given bind groups of a discarded or replaced generation.
-	 *
-	 * @param {Array<BindGroup>} bindings - The bind groups.
-	 */
-	destroyForGeneration( bindings ) {
-
-		this._destroyBindings( bindings );
-
-	}
-
-	/**
 	 * Marks the given render object's bindings as initialized after a
 	 * promotion transferred the generation's bind groups to it. The
-	 * generation's `createForGeneration()` already performed residency.
+	 * generation task already performed residency via `_createBindings()`.
 	 *
 	 * @param {RenderObject} renderObject - The render object.
-	 * @param {RenderGeneration} generation - The promoted generation.
 	 */
-	applyGeneration( renderObject /*, generation */ ) {
+	applyGeneration( renderObject ) {
 
 		this.get( renderObject ).initialized = true;
 

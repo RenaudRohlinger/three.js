@@ -83,14 +83,11 @@ class Info {
 		 * @readonly
 		 * @property {number} queued - The number of runnable tasks.
 		 * @property {number} blocked - The number of tasks parked on a gate.
-		 * @property {number} inFlight - The number of worker and upload requests awaiting completion.
+		 * @property {number} inFlight - The number of background requests awaiting completion.
 		 * @property {number} pipelines - The number of async pipelines awaiting completion.
 		 * @property {number} promotions - The lifetime number of promoted generations.
 		 * @property {number} failed - The lifetime number of failed builds.
-		 * @property {number} fallbacks - The lifetime number of builds the worker declined (ran cooperatively).
-		 * @property {number} workerTime - The milliseconds spent compiling in the worker (lifetime).
 		 * @property {number} mainThreadTime - The milliseconds of scheduler main-thread slices (lifetime).
-		 * @property {number} pendingBytes - The pending GPU resource memory of background uploads.
 		 */
 		this.asyncCompilation = {
 			queued: 0,
@@ -99,10 +96,7 @@ class Info {
 			pipelines: 0,
 			promotions: 0,
 			failed: 0,
-			fallbacks: 0,
-			workerTime: 0,
-			mainThreadTime: 0,
-			pendingBytes: 0
+			mainThreadTime: 0
 		};
 
 		/**

@@ -1723,10 +1723,7 @@ class WebGPUBackend extends Backend {
 
 		const { object, context } = renderObject;
 
-		// in async compilation mode, encode-time structural values come from
-		// the promoted draw snapshot — never from the live material
-
-		const material = renderObject.drawState !== null ? renderObject.drawState : renderObject.material;
+		const material = renderObject.drawMaterial;
 
 		const index = renderObject.getIndex();
 		const hasIndex = ( index !== null );
@@ -2060,6 +2057,9 @@ class WebGPUBackend extends Backend {
 	 * cache. Used by `needsRenderUpdate()` and by async compilation mode's
 	 * change detection, which deliberately excludes the material version
 	 * (version-driven changes are handled by the render object cache key).
+	 *
+	 * The property set must stay in sync with `captureDrawState()` and
+	 * `getRenderCacheKey()`.
 	 *
 	 * @private
 	 * @param {Object} data - The render object's backend data.

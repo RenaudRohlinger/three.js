@@ -304,9 +304,8 @@ export default QUnit.module( 'Renderers', () => {
 
 				const scheduler = createScheduler();
 
-				const bad = new TestTask( 'bad', WorkTask.NORMAL );
+				const bad = new TestTask( 12345, WorkTask.NORMAL );
 
-				bad.failureKey = 12345;
 				bad.run = function () {
 
 					throw new Error( 'broken shader' );
@@ -323,7 +322,7 @@ export default QUnit.module( 'Renderers', () => {
 				assert.strictEqual( bad.status, 'failed', 'throwing task settled failed' );
 				assert.strictEqual( bad.error.message, 'broken shader', 'error preserved' );
 				assert.strictEqual( good.status, 'ready', 'other task unaffected' );
-				assert.strictEqual( scheduler.isFailed( 12345 ), true, 'failure remembered under the failure key' );
+				assert.strictEqual( scheduler.isFailed( 12345 ), true, 'failure remembered under the task key' );
 				assert.strictEqual( scheduler.stats.failed, 1, 'failure counted' );
 
 			} );
@@ -361,26 +360,6 @@ export default QUnit.module( 'Renderers', () => {
 				task.onSettled( () => calls ++ );
 
 				assert.strictEqual( calls, 2, 'late onSettled fired immediately' );
-
-			} );
-
-			QUnit.test( 'removeOwner cancels when the last owner leaves', ( assert ) => {
-
-				const task = new TestTask( 't', WorkTask.NORMAL );
-
-				const ownerA = {};
-				const ownerB = {};
-
-				task.addOwner( ownerA );
-				task.addOwner( ownerB );
-
-				task.removeOwner( ownerA );
-
-				assert.strictEqual( task.isTerminal(), false, 'task alive while owned' );
-
-				task.removeOwner( ownerB );
-
-				assert.strictEqual( task.status, 'cancelled', 'task cancelled when unowned' );
 
 			} );
 
@@ -477,47 +456,6 @@ export default QUnit.module( 'Renderers', () => {
 				assert.strictEqual( settled, 2, 'all waiters notified' );
 				assert.strictEqual( scheduler.promotions.length, 0, 'promotions cleared' );
 				assert.strictEqual( scheduler.tasks.size, 0, 'task registry cleared' );
-
-			} );
-
-			QUnit.test( 'in-flight capacity slots park and wake on the capacity gate', ( assert ) => {
-
-				const scheduler = createScheduler();
-				scheduler.maxInFlight = 1;
-
-				const first = new TestTask( 'first', WorkTask.NORMAL );
-
-				first.run = function () {
-
-					this.runs ++;
-
-					if ( scheduler.requestInFlightSlot( this ) === false ) return WorkTask.BLOCKED;
-
-					return WorkTask.WAIT;
-
-				};
-
-				const second = new TestTask( 'second', WorkTask.NORMAL );
-
-				second.run = first.run;
-
-				scheduler.add( first );
-				scheduler.add( second );
-
-				scheduler.update();
-
-				assert.strictEqual( first.runs, 1, 'first acquired the slot and waits' );
-				assert.strictEqual( second.runs, 1, 'second ran once and parked on capacity' );
-
-				scheduler.update();
-
-				assert.strictEqual( second.runs, 1, 'capacity-parked task consumes no slices' );
-
-				scheduler.resume( first ); // releases the slot, wakes the waiter
-
-				scheduler.update();
-
-				assert.strictEqual( second.runs, 2, 'second woke when capacity freed' );
 
 			} );
 

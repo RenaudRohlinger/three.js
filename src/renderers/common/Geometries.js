@@ -345,16 +345,11 @@ class Geometries extends DataMap {
 	 */
 	getIndex( renderObject ) {
 
-		const { geometry, material } = renderObject;
+		const { geometry } = renderObject;
 
 		let index = geometry.index;
 
-		// in async compilation mode, encode-time structural values come from
-		// the promoted draw snapshot
-
-		const wireframe = renderObject.drawState !== null ? renderObject.drawState.wireframe : material.wireframe;
-
-		if ( wireframe === true ) {
+		if ( renderObject.drawMaterial.wireframe === true ) {
 
 			const wireframes = this.wireframes;
 
