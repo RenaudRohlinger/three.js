@@ -257,7 +257,8 @@ WorkTask.BLOCKED = 2;
 WorkTask.DONE = 3;
 
 /**
- * High task priority.
+ * High task priority. Used for visible objects without an active generation
+ * and for application-prioritized work (`object.compilePriority > 0`).
  *
  * @static
  * @type {number}
@@ -273,7 +274,8 @@ WorkTask.HIGH = 0;
 WorkTask.NORMAL = 1;
 
 /**
- * Low task priority.
+ * Low task priority. Used for deprioritized application work
+ * (`object.compilePriority < 0`) and deferred cleanup.
  *
  * @static
  * @type {number}

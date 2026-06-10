@@ -77,6 +77,9 @@ class Renderer {
 	 * generation is compiled (like textures, which render as placeholders until uploaded), and changed
 	 * objects keep rendering their last compiled state until the replacement is promoted atomically
 	 * between frames. Use {@link Renderer#compileAsync} to prewarm materials when pop-in is unacceptable.
+	 * Applications can bias the compilation order of important drawables by setting a `compilePriority`
+	 * hint on a 3D object (or its material): positive values compile ahead of all automatic replacement
+	 * work, negative values compile after it. The hint is read when a compilation is requested.
 	 */
 
 	/**

@@ -540,6 +540,84 @@ export default QUnit.module( 'Renderers', () => {
 
 			} );
 
+			QUnit.test( 'reprioritize() escalates queued tasks and never demotes', ( assert ) => {
+
+				const scheduler = createScheduler();
+				const log = [];
+
+				const first = new TestTask( 'first', WorkTask.NORMAL );
+				const second = new TestTask( 'second', WorkTask.NORMAL );
+
+				first.log = second.log = log;
+
+				scheduler.add( first );
+				scheduler.add( second );
+
+				// a prioritized owner joins the second task — it must run first
+
+				scheduler.reprioritize( second, WorkTask.HIGH );
+
+				scheduler.update();
+
+				assert.deepEqual( log, [ 'second', 'first' ], 'escalated task ran before earlier-queued work' );
+
+				const task = new TestTask( 't', WorkTask.HIGH, [ WorkTask.YIELD ] );
+
+				scheduler.add( task );
+				scheduler.reprioritize( task, WorkTask.LOW );
+
+				assert.strictEqual( task.priority, WorkTask.HIGH, 'tasks are never demoted' );
+
+			} );
+
+			QUnit.test( 'gate release wakes the highest-priority waiter', ( assert ) => {
+
+				const scheduler = createScheduler();
+				const log = [];
+
+				const holder = new TestTask( 'holder', WorkTask.NORMAL, [ WorkTask.WAIT ] );
+				scheduler.add( holder );
+				scheduler.update();
+				scheduler.tryAcquireGate( 'g', holder );
+
+				const makeWaiter = ( key, priority ) => {
+
+					const task = new TestTask( key, priority );
+
+					task.run = function () {
+
+						this.runs ++;
+
+						if ( scheduler.tryAcquireGate( 'g', this ) === false ) return WorkTask.BLOCKED;
+
+						log.push( this.key );
+						this.settle( 'ready' );
+
+						return WorkTask.DONE;
+
+					};
+
+					scheduler.add( task );
+
+					return task;
+
+				};
+
+				makeWaiter( 'normal', WorkTask.NORMAL );
+				makeWaiter( 'low', WorkTask.LOW );
+				makeWaiter( 'high', WorkTask.HIGH );
+
+				scheduler.update(); // all three park, in that order
+
+				scheduler.release( 'g' );
+				scheduler.update();
+				scheduler.update();
+				scheduler.update();
+
+				assert.deepEqual( log, [ 'high', 'normal', 'low' ], 'waiters woke in priority order, not FIFO' );
+
+			} );
+
 			QUnit.test( 'poke() requeues waiting tasks but not parked ones', ( assert ) => {
 
 				const scheduler = createScheduler();

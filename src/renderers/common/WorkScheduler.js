@@ -374,6 +374,39 @@ class WorkScheduler {
 	}
 
 	/**
+	 * Escalates the priority of an existing task, e.g. when a prioritized
+	 * render object joins work that was queued at a lower priority. Tasks
+	 * are never demoted — the priority of a shared task is the highest of
+	 * its owners.
+	 *
+	 * @param {WorkTask} task - The task to escalate.
+	 * @param {number} priority - The new priority.
+	 */
+	reprioritize( task, priority ) {
+
+		if ( task.isTerminal() === true || priority >= task.priority ) return;
+
+		if ( task.queued === true ) {
+
+			const queue = this.queues[ task.priority ];
+			const index = queue.indexOf( task );
+
+			if ( index !== - 1 ) queue.splice( index, 1 );
+
+			task.priority = priority;
+			task.queued = false;
+
+			this._enqueue( task );
+
+		} else {
+
+			task.priority = priority;
+
+		}
+
+	}
+
+	/**
 	 * Attempts to acquire a named gate for the given task. If the gate is
 	 * already held by another task, the task's `gate` property is set so a
 	 * subsequent `BLOCKED` result parks it on the gate.
@@ -409,7 +442,9 @@ class WorkScheduler {
 	}
 
 	/**
-	 * Releases a named gate and wakes its first non-terminal parked task.
+	 * Releases a named gate and wakes its highest-priority non-terminal
+	 * parked task (FIFO within the same priority). Terminal waiters are
+	 * reaped.
 	 *
 	 * @param {string} name - The gate name.
 	 */
@@ -426,31 +461,43 @@ class WorkScheduler {
 
 		}
 
-		let waiter = gate.waiters.shift();
+		const waiters = gate.waiters;
 
-		while ( waiter !== undefined ) {
+		let best = - 1;
 
-			this._blockedCount --;
+		for ( let i = 0; i < waiters.length; i ++ ) {
+
+			const waiter = waiters[ i ];
 
 			if ( waiter.isTerminal() === true ) {
 
-				// settled while parked — reap and try the next waiter
+				// settled while parked — reap
 
+				waiters.splice( i, 1 );
+				this._blockedCount --;
 				this._finish( waiter );
 
-				waiter = gate.waiters.shift();
+				i --;
 
-			} else {
+			} else if ( best === - 1 || waiter.priority < waiters[ best ].priority ) {
 
-				waiter.gate = null;
-				waiter.status = 'queued';
-
-				this._enqueue( waiter );
-				this.requestUpdate();
-
-				break;
+				best = i;
 
 			}
+
+		}
+
+		if ( best !== - 1 ) {
+
+			const waiter = waiters.splice( best, 1 )[ 0 ];
+
+			this._blockedCount --;
+
+			waiter.gate = null;
+			waiter.status = 'queued';
+
+			this._enqueue( waiter );
+			this.requestUpdate();
 
 		}
 

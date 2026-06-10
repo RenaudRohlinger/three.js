@@ -1083,14 +1083,38 @@ class RenderObject {
 		generation.drawState = drawState;
 		generation.dynamicCacheKey = this.initialNodesCacheKey;
 
-		// visible objects without an active generation compile first;
-		// compileAsync prewarming always joins at normal priority
+		// the application hint wins (object first, then material): positive
+		// values compile ahead of all automatic replacement work, negative
+		// values compile after it. Otherwise visible objects without an
+		// active generation compile first and compileAsync prewarming joins
+		// at normal priority.
 
-		const priority = ( renderer._compilationTasks === null && this.active === null ) ? WorkTask.HIGH : WorkTask.NORMAL;
+		const compilePriority = this.object.compilePriority !== undefined ? this.object.compilePriority :
+			( this.material.compilePriority !== undefined ? this.material.compilePriority : 0 );
+
+		let priority;
+
+		if ( compilePriority > 0 ) {
+
+			priority = WorkTask.HIGH;
+
+		} else if ( compilePriority < 0 ) {
+
+			priority = WorkTask.LOW;
+
+		} else {
+
+			priority = ( renderer._compilationTasks === null && this.active === null ) ? WorkTask.HIGH : WorkTask.NORMAL;
+
+		}
 
 		// join existing work for this key or create it — always use the returned task
 
 		const task = scheduler.add( new RenderGenerationTask( renderer, cacheKey, priority ) );
+
+		// shared work runs at the highest priority of its owners
+
+		if ( priority < task.priority ) scheduler.reprioritize( task, priority );
 
 		task.join( this, generation );
 

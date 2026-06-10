@@ -43,7 +43,8 @@
 				Compare <strong>asyncCompilation: true</strong> against the default synchronous compilation.<br />
 				Use <strong>spawn wave</strong> (streaming new assets) and <strong>rebuild all materials</strong> (shader editing) and watch the frame graph:<br />
 				synchronous compilation freezes the loop (red bars), async compilation keeps every frame on budget —<br />
-				changed objects keep their last material until the replacement is ready, new objects pop in like textures.
+				changed objects keep their last material until the replacement is ready, new objects pop in like textures.<br />
+				The center mesh sets <strong>compilePriority</strong>, so on a rebuild its new material lands before the grid's.
 			</small>
 		</div>
 
@@ -73,7 +74,7 @@
 
 			const FRAME_BUDGET = 1000 / 30; // a frame longer than this is a visible hitch
 
-			let camera, scene, renderer, controls;
+			let camera, scene, renderer, controls, hero;
 
 			const meshes = [];
 			const geometries = [];
@@ -83,7 +84,8 @@
 
 			const params = {
 				asyncCompilation: new URLSearchParams( window.location.search ).get( 'async' ) !== 'false',
-				churn: false
+				churn: false,
+				heroPriority: true
 			};
 
 			// ---------------------------------------------------------------------
@@ -331,6 +333,15 @@
 
 				}
 
+				// the hero mesh — `compilePriority` biases the background work so
+				// its replacement compiles ahead of everything else on rebuilds
+
+				hero = new THREE.Mesh( new THREE.TorusKnotGeometry( 0.9, 0.28, 128, 24 ), createUniqueMaterial() );
+				hero.position.set( 0, 2.2, 0 );
+				hero.compilePriority = params.heroPriority ? 1 : 0;
+				scene.add( hero );
+				meshes.push( hero );
+
 				//
 
 				renderer = new THREE.WebGPURenderer( { antialias: true, asyncCompilation: params.asyncCompilation } );
@@ -373,6 +384,11 @@
 				gui.add( { spawnWave }, 'spawnWave' ).name( '▶ spawn wave (24 new objects)' );
 				gui.add( { rebuildAllMaterials }, 'rebuildAllMaterials' ).name( '▶ rebuild all materials' );
 				gui.add( params, 'churn' ).name( 'continuous editing' );
+				gui.add( params, 'heroPriority' ).name( 'prioritize center mesh' ).onChange( ( value ) => {
+
+					hero.compilePriority = value ? 1 : 0;
+
+				} );
 
 				window.addEventListener( 'resize', onWindowResize );
 
