@@ -8,6 +8,8 @@ export default QUnit.module( 'Core', () => {
 
 			const reference = ( typeof global !== 'undefined' ) ? global : self;
 
+			const original = reference.performance;
+
 			reference.performance = {
 				deltaTime: 0,
 
@@ -22,6 +24,15 @@ export default QUnit.module( 'Core', () => {
 					return this.deltaTime;
 
 				}
+
+			};
+
+			// restores the original performance object so the mock does not
+			// leak into other test suites
+
+			return function () {
+
+				reference.performance = original;
 
 			};
 
@@ -50,22 +61,30 @@ export default QUnit.module( 'Core', () => {
 
 			}
 
-			mockPerformance();
+			const restorePerformance = mockPerformance();
 
-			const clock = new Clock( false );
+			try {
 
-			clock.start();
+				const clock = new Clock( false );
 
-			performance.next( 123 );
-			assert.numEqual( clock.getElapsedTime(), 0.123, 'okay' );
+				clock.start();
 
-			performance.next( 100 );
-			assert.numEqual( clock.getElapsedTime(), 0.223, 'okay' );
+				performance.next( 123 );
+				assert.numEqual( clock.getElapsedTime(), 0.123, 'okay' );
 
-			clock.stop();
+				performance.next( 100 );
+				assert.numEqual( clock.getElapsedTime(), 0.223, 'okay' );
 
-			performance.next( 1000 );
-			assert.numEqual( clock.getElapsedTime(), 0.223, 'don\'t update time if the clock was stopped' );
+				clock.stop();
+
+				performance.next( 1000 );
+				assert.numEqual( clock.getElapsedTime(), 0.223, 'don\'t update time if the clock was stopped' );
+
+			} finally {
+
+				restorePerformance();
+
+			}
 
 		} );
 
