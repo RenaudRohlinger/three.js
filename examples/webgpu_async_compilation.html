@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgpu - async compilation</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<meta property="og:title" content="three.js webgpu - async compilation">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://threejs.org/examples/webgpu_async_compilation.html">
+		<meta property="og:image" content="https://threejs.org/examples/screenshots/webgpu_async_compilation.jpg">
+		<link type="text/css" rel="stylesheet" href="example.css">
+		<style>
+			#hud {
+				position: absolute;
+				bottom: 10px;
+				left: 10px;
+				color: #cdf;
+				font-family: monospace;
+				font-size: 12px;
+				white-space: pre;
+				pointer-events: none;
+				text-shadow: 0 1px 2px #000;
+			}
+			#graph {
+				position: absolute;
+				bottom: 10px;
+				right: 10px;
+				background: rgba(0,0,0,0.55);
+				border: 1px solid #345;
+			}
+		</style>
+	</head>
+	<body>
+
+		<div id="info">
+			<a href="https://threejs.org/" target="_blank" rel="noopener" class="logo-link"></a>
+
+			<div class="title-wrapper">
+				<a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a><span>Async Compilation</span>
+			</div>
+
+			<small>
+				Compare <strong>asyncCompilation: true</strong> against the default synchronous compilation.<br />
+				Use <strong>spawn wave</strong> (streaming new assets) and <strong>rebuild all materials</strong> (shader editing) and watch the frame graph:<br />
+				synchronous compilation freezes the loop (red bars), async compilation keeps every frame on budget —<br />
+				changed objects keep their last material until the replacement is ready, new objects pop in like textures.
+			</small>
+		</div>
+
+		<canvas id="graph" width="320" height="78"></canvas>
+		<div id="hud"></div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.webgpu.js",
+					"three/webgpu": "../build/three.webgpu.js",
+					"three/tsl": "../build/three.tsl.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three/webgpu';
+
+			import { Fn, color, mix, positionLocal, normalWorld, sin, cos, time, float } from 'three/tsl';
+
+			import WebGPU from 'three/addons/capabilities/WebGPU.js';
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			const FRAME_BUDGET = 1000 / 30; // a frame longer than this is a visible hitch
+
+			let camera, scene, renderer, controls;
+
+			const meshes = [];
+			const geometries = [];
+
+			let materialId = 0;
+			let spawnRing = 0;
+
+			const params = {
+				asyncCompilation: new URLSearchParams( window.location.search ).get( 'async' ) !== 'false',
+				churn: false
+			};
+
+			// ---------------------------------------------------------------------
+			// measurement
+			// ---------------------------------------------------------------------
+
+			const frameTimes = []; // ring buffer of recent frame intervals
+
+			let lastFrameTime = 0;
+
+			const action = {
+				name: null, // 'spawn wave' | 'rebuild all'
+				start: 0, // performance.now() at the click
+				until: 0, // measurement window end
+				targetDraws: 0, // scene draw calls expected once everything is visible
+				worst: 0, // longest frame interval in the window
+				dropped: 0, // frames over FRAME_BUDGET in the window
+				timeToVisible: - 1 // ms from click until everything drew
+			};
+
+			const lastResults = {}; // last finished measurement per action name
+
+			function beginAction( name, addedObjects ) {
+
+				finishAction();
+
+				action.name = name;
+				action.start = performance.now();
+				action.until = action.start + 4000;
+
+				// every mesh plus the output color transform quad
+
+				action.targetDraws = meshes.length + addedObjects + 1;
+				action.targetReached = false;
+				action.worst = 0;
+				action.dropped = 0;
+				action.timeToVisible = - 1;
+
+			}
+
+			function finishAction() {
+
+				if ( action.name === null ) return;
+
+				lastResults[ action.name ] = {
+					worst: action.worst,
+					dropped: action.dropped,
+					timeToVisible: action.timeToVisible
+				};
+
+				// persist for cross-mode comparison (the option is fixed per renderer,
+				// so the other mode is one reload away)
+
+				try {
+
+					const store = JSON.parse( sessionStorage.getItem( 'asyncCompilationDemo' ) || '{}' );
+					store[ params.asyncCompilation ? 'async' : 'sync' ] = lastResults;
+					sessionStorage.setItem( 'asyncCompilationDemo', JSON.stringify( store ) );
+
+				} catch ( e ) { /* storage unavailable */ }
+
+				action.name = null;
+
+			}
+
+			function measureFrame( now, sceneDraws ) {
+
+				if ( lastFrameTime > 0 ) {
+
+					const delta = now - lastFrameTime;
+
+					frameTimes.push( delta );
+					if ( frameTimes.length > 150 ) frameTimes.shift();
+
+					if ( action.name !== null ) {
+
+						if ( delta > action.worst ) action.worst = delta;
+						if ( delta > FRAME_BUDGET ) action.dropped ++;
+
+						if ( action.timeToVisible < 0 ) {
+
+							if ( action.targetReached === true ) {
+
+								// the frame that issued all draws has been displaced —
+								// everything is actually on screen now (in synchronous
+								// mode draws are issued before the pipeline compile
+								// stall, so counting issuance alone would under-report)
+
+								action.timeToVisible = now - action.start;
+
+							} else if ( sceneDraws >= action.targetDraws ) {
+
+								action.targetReached = true;
+
+							}
+
+						}
+
+						if ( now > action.until ) finishAction();
+
+					}
+
+				}
+
+				lastFrameTime = now;
+
+			}
+
+			// ---------------------------------------------------------------------
+			// workload — every material is a structurally unique TSL graph, so each
+			// one requires a full node build, WGSL generation and a new pipeline
+			// ---------------------------------------------------------------------
+
+			function createUniqueMaterial() {
+
+				const id = materialId ++;
+
+				const material = new THREE.MeshStandardNodeMaterial();
+
+				const baseColor = new THREE.Color().setHSL( ( id * 0.071 ) % 1, 0.6, 0.55 );
+				const altColor = new THREE.Color().setHSL( ( id * 0.13 + 0.4 ) % 1, 0.8, 0.45 );
+
+				material.colorNode = Fn( () => {
+
+					const wave = sin( positionLocal.y.mul( float( 2 + ( id % 7 ) ) ).add( time.mul( ( id % 5 ) + 1 ) ) );
+					let result = mix( color( baseColor ), color( altColor ), wave.mul( 0.5 ).add( 0.5 ) );
+
+					// vary the graph structure itself, not just its values
+
+					for ( let i = 0, l = id % 4; i < l; i ++ ) {
+
+						result = result.add( cos( positionLocal.x.mul( float( 3 + i ) ) ).mul( 0.05 ) );
+
+					}
+
+					if ( id % 3 === 0 ) result = result.mul( normalWorld.y.mul( 0.5 ).add( 0.75 ) );
+
+					return result;
+
+				} )();
+
+				material.roughnessNode = sin( positionLocal.x.mul( float( 4 + ( id % 3 ) ) ) ).mul( 0.25 ).add( float( 0.3 + ( id % 6 ) * 0.1 ) );
+				material.metalness = ( id % 4 ) * 0.25;
+
+				return material;
+
+			}
+
+			function addMesh( position ) {
+
+				const mesh = new THREE.Mesh( geometries[ meshes.length % geometries.length ], createUniqueMaterial() );
+
+				mesh.position.copy( position );
+				scene.add( mesh );
+				meshes.push( mesh );
+
+				return mesh;
+
+			}
+
+			// streaming scenario: a batch of brand-new objects with brand-new
+			// materials enters the scene at once
+
+			function spawnWave() {
+
+				const count = 24;
+
+				beginAction( 'spawn wave', count );
+
+				spawnRing ++;
+
+				const radius = 6 + spawnRing * 1.1;
+
+				for ( let i = 0; i < count; i ++ ) {
+
+					const angle = ( i / count ) * Math.PI * 2 + spawnRing * 0.2;
+
+					addMesh( new THREE.Vector3( Math.cos( angle ) * radius, ( spawnRing % 3 ) * 1.2 - 1, Math.sin( angle ) * radius ) );
+
+				}
+
+			}
+
+			// shader-editor scenario: an edit recompiles every material in the
+			// scene — with async compilation each mesh keeps its previous look
+			// until its replacement is ready
+
+			function rebuildAllMaterials() {
+
+				beginAction( 'rebuild all', 0 );
+
+				for ( const mesh of meshes ) {
+
+					mesh.material.dispose();
+					mesh.material = createUniqueMaterial();
+
+				}
+
+			}
+
+			// ---------------------------------------------------------------------
+
+			init();
+
+			function init() {
+
+				if ( WebGPU.isAvailable() === false ) {
+
+					document.body.appendChild( WebGPU.getErrorMessage() );
+
+					throw new Error( 'No WebGPU support' );
+
+				}
+
+				camera = new THREE.PerspectiveCamera( 50, window.innerWidth / window.innerHeight, 0.1, 100 );
+				camera.position.set( 0, 8, 16 );
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x111113 );
+
+				scene.add( new THREE.HemisphereLight( 0xffffff, 0x444466, 2 ) );
+
+				const dirLight = new THREE.DirectionalLight( 0xffffff, 2 );
+				dirLight.position.set( 4, 8, 4 );
+				scene.add( dirLight );
+
+				geometries.push(
+					new THREE.BoxGeometry( 0.8, 0.8, 0.8 ),
+					new THREE.SphereGeometry( 0.5, 32, 16 ),
+					new THREE.TorusKnotGeometry( 0.35, 0.12, 64, 12 ),
+					new THREE.ConeGeometry( 0.5, 0.9, 24 )
+				);
+
+				// initial grid
+
+				const size = 6;
+
+				for ( let x = 0; x < size; x ++ ) {
+
+					for ( let z = 0; z < size; z ++ ) {
+
+						addMesh( new THREE.Vector3( ( x - size / 2 + 0.5 ) * 1.4, 0, ( z - size / 2 + 0.5 ) * 1.4 ) );
+
+					}
+
+				}
+
+				//
+
+				renderer = new THREE.WebGPURenderer( { antialias: true, asyncCompilation: params.asyncCompilation } );
+
+				if ( renderer.info.asyncCompilation === undefined ) {
+
+					// an older build silently ignores the asyncCompilation option
+
+					const message = document.createElement( 'div' );
+					message.style.cssText = 'position:absolute;top:50%;width:100%;text-align:center;color:#fff;font-family:monospace;';
+					message.textContent = 'This example requires a three.js build with asyncCompilation support — run "npm run build" and reload.';
+					document.body.appendChild( message );
+
+					throw new Error( 'webgpu_async_compilation: "build/three.webgpu.js" predates the asyncCompilation feature.' );
+
+				}
+
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				document.body.appendChild( renderer.domElement );
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.target.set( 0, 0, 0 );
+
+				//
+
+				const gui = new GUI();
+
+				gui.add( params, 'asyncCompilation' ).name( 'async compilation' ).onChange( ( value ) => {
+
+					// the option is fixed for the renderer's lifetime
+
+					const url = new URL( window.location.href );
+					url.searchParams.set( 'async', value );
+					window.location.href = url.href;
+
+				} );
+
+				gui.add( { spawnWave }, 'spawnWave' ).name( '▶ spawn wave (24 new objects)' );
+				gui.add( { rebuildAllMaterials }, 'rebuildAllMaterials' ).name( '▶ rebuild all materials' );
+				gui.add( params, 'churn' ).name( 'continuous editing' );
+
+				window.addEventListener( 'resize', onWindowResize );
+
+				setInterval( () => {
+
+					if ( params.churn === false ) return;
+
+					const mesh = meshes[ Math.floor( Math.random() * meshes.length ) ];
+
+					mesh.material.dispose();
+					mesh.material = createUniqueMaterial();
+
+				}, 150 );
+
+				// hook for automated benchmarks
+
+				window.__demo = {
+					spawnWave,
+					rebuildAllMaterials,
+					results: () => ( { mode: params.asyncCompilation ? 'async' : 'sync', running: action.name, results: lastResults } ),
+					drawCalls: () => renderer.info.render.drawCalls,
+					meshCount: () => meshes.length
+				};
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			// ---------------------------------------------------------------------
+			// display
+			// ---------------------------------------------------------------------
+
+			const graphContext = document.getElementById( 'graph' ).getContext( '2d' );
+			const hudElement = document.getElementById( 'hud' );
+
+			function drawGraph() {
+
+				const w = 320, h = 78, scale = h / 100; // 100 ms full scale
+
+				graphContext.clearRect( 0, 0, w, h );
+
+				// budget lines: 16.7 ms (60 fps) and 33.3 ms (30 fps)
+
+				graphContext.fillStyle = '#2a4d2a';
+				graphContext.fillRect( 0, h - 16.7 * scale, w, 1 );
+				graphContext.fillStyle = '#5d452a';
+				graphContext.fillRect( 0, h - 33.3 * scale, w, 1 );
+
+				for ( let i = 0; i < frameTimes.length; i ++ ) {
+
+					const ms = frameTimes[ i ];
+					const barHeight = Math.min( ms, 100 ) * scale;
+
+					graphContext.fillStyle = ms <= 16.8 ? '#3fae6a' : ( ms <= FRAME_BUDGET ? '#e0a23f' : '#e04f3f' );
+					graphContext.fillRect( i * 2 + ( w - frameTimes.length * 2 ), h - barHeight, 2, barHeight );
+
+				}
+
+				graphContext.fillStyle = '#9ab';
+				graphContext.font = '10px monospace';
+				graphContext.fillText( 'frame time — 100 ms scale', 6, 10 );
+
+			}
+
+			function formatResult( entry ) {
+
+				if ( entry === undefined ) return '—';
+
+				return `worst ${ entry.worst.toFixed( 0 ) } ms, ${ entry.dropped } dropped` +
+					( entry.timeToVisible >= 0 ? `, visible after ${ entry.timeToVisible.toFixed( 0 ) } ms` : '' );
+
+			}
+
+			function updateHUD() {
+
+				const ac = renderer.info.asyncCompilation;
+				const mode = params.asyncCompilation;
+
+				let other = {};
+
+				try {
+
+					other = JSON.parse( sessionStorage.getItem( 'asyncCompilationDemo' ) || '{}' )[ mode ? 'sync' : 'async' ] || {};
+
+				} catch ( e ) { /* storage unavailable */ }
+
+				const lines = [
+					`mode             ${ mode ? 'asyncCompilation: true' : 'synchronous (default)' }`,
+					`objects          ${ meshes.length }   unique materials ${ materialId }`,
+					'',
+					`this mode        spawn wave:   ${ formatResult( lastResults[ 'spawn wave' ] ) }`,
+					`                 rebuild all:  ${ formatResult( lastResults[ 'rebuild all' ] ) }`,
+					`${ mode ? 'sync (reload)  ' : 'async (reload) ' }  spawn wave:   ${ formatResult( other[ 'spawn wave' ] ) }`,
+					`                 rebuild all:  ${ formatResult( other[ 'rebuild all' ] ) }`,
+					'',
+					`background       queued ${ ac.queued }  in flight ${ ac.inFlight }  pipelines ${ ac.pipelines }  promotions ${ ac.promotions }`
+				];
+
+				if ( action.name !== null ) lines.splice( 2, 0, `measuring        ${ action.name }…` );
+
+				hudElement.textContent = lines.join( '\n' );
+
+			}
+
+			function animate() {
+
+				controls.update();
+
+				const t = performance.now() * 0.0005;
+
+				for ( let i = 0; i < meshes.length; i ++ ) {
+
+					meshes[ i ].rotation.y = t + i * 0.1;
+
+				}
+
+				renderer.render( scene, camera );
+
+				measureFrame( performance.now(), renderer.info.render.drawCalls );
+
+				drawGraph();
+				updateHUD();
+
+			}
+
+		</script>
+	</body>
+</html>

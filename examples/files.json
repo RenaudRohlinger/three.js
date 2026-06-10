@@ -306,6 +306,7 @@
 	"webgpu (wip)": [
 		"webgpu_animation_retargeting",
 		"webgpu_animation_retargeting_readyplayer",
+		"webgpu_async_compilation",
 		"webgpu_backdrop",
 		"webgpu_backdrop_area",
 		"webgpu_backdrop_water",
