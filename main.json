@@ -1,0 +1,166 @@
+{
+	"entries": {
+		"main/procedural-card": {
+			"attributes": [
+				{
+					"name": "uv",
+					"node": null,
+					"type": "vec2"
+				},
+				{
+					"name": "position",
+					"node": null,
+					"type": "vec3"
+				}
+			],
+			"bindGroups": [
+				{
+					"bindings": [
+						{
+							"kind": "NodeUniformsGroup",
+							"name": "render",
+							"uniforms": [
+								{
+									"name": "cameraProjectionMatrix",
+									"type": "mat4"
+								},
+								{
+									"name": "cameraViewMatrix",
+									"type": "mat4"
+								}
+							]
+						}
+					],
+					"index": 0,
+					"name": "render"
+				},
+				{
+					"bindings": [
+						{
+							"kind": "NodeUniformsGroup",
+							"name": "object",
+							"uniforms": [
+								{
+									"name": "nodeUniform0",
+									"type": "float"
+								},
+								{
+									"name": "nodeUniform3",
+									"type": "mat4"
+								}
+							]
+						}
+					],
+					"index": 1,
+					"name": "object"
+				}
+			],
+			"computeShader": null,
+			"fragmentShader": "// Three.js r185 - Node System\n\n// global\ndiagnostic( off, derivative_uniformity );\n\n\n// structs\n\nstruct OutputStruct {\n\t@location( 0 ) color: vec4<f32>\n};\nvar<private> output : OutputStruct;\n\n// uniforms\n\nstruct objectStruct {\n\tnodeUniform0 : f32,\n\tnodeUniform3 : mat4x4<f32>\n};\n@binding( 0 ) @group( 1 )\nvar<uniform> object : objectStruct;\n\n// vars\nvar<private> DiffuseColor : vec4<f32>;\nvar<private> nodeVar0 : vec2<f32>;\nvar<private> Output : vec4<f32>;\nvar<private> nodeVar1 : vec4<f32>;\n\n// codes\nfn mx_rotl32 ( x : u32, k : i32 ) -> u32 {\n\n\tvar nodeVar0 : i32;\n\tvar nodeVar1 : u32;\n\n\tnodeVar0 = k;\n\tnodeVar1 = x;\n\n\treturn ( ( nodeVar1 << u32( nodeVar0 ) ) | ( nodeVar1 >> u32( ( 32 - nodeVar0 ) ) ) );\n\n}\n\nfn mx_bjfinal ( a : u32, b : u32, c : u32 ) -> u32 {\n\n\tvar nodeVar0 : u32;\n\tvar nodeVar1 : u32;\n\tvar nodeVar2 : u32;\n\n\tnodeVar0 = c;\n\tnodeVar1 = b;\n\tnodeVar2 = a;\n\tnodeVar0 = ( nodeVar0 ^ nodeVar1 );\n\tnodeVar0 = ( nodeVar0 - mx_rotl32( nodeVar1, 14 ) );\n\tnodeVar2 = ( nodeVar2 ^ nodeVar0 );\n\tnodeVar2 = ( nodeVar2 - mx_rotl32( nodeVar0, 11 ) );\n\tnodeVar1 = ( nodeVar1 ^ nodeVar2 );\n\tnodeVar1 = ( nodeVar1 - mx_rotl32( nodeVar2, 25 ) );\n\tnodeVar0 = ( nodeVar0 ^ nodeVar1 );\n\tnodeVar0 = ( nodeVar0 - mx_rotl32( nodeVar1, 16 ) );\n\tnodeVar2 = ( nodeVar2 ^ nodeVar0 );\n\tnodeVar2 = ( nodeVar2 - mx_rotl32( nodeVar0, 4 ) );\n\tnodeVar1 = ( nodeVar1 ^ nodeVar2 );\n\tnodeVar1 = ( nodeVar1 - mx_rotl32( nodeVar2, 14 ) );\n\tnodeVar0 = ( nodeVar0 ^ nodeVar1 );\n\tnodeVar0 = ( nodeVar0 - mx_rotl32( nodeVar1, 24 ) );\n\n\treturn nodeVar0;\n\n}\n\nfn mx_hash_int_2 ( x : i32, y : i32, z : i32 ) -> u32 {\n\n\tvar nodeVar0 : i32;\n\tvar nodeVar1 : i32;\n\tvar nodeVar2 : i32;\n\tvar nodeVar3 : u32;\n\tvar nodeVar4 : u32;\n\tvar nodeVar5 : u32;\n\tvar nodeVar6 : u32;\n\n\tnodeVar0 = z;\n\tnodeVar1 = y;\n\tnodeVar2 = x;\n\tnodeVar3 = 3u;\n\tnodeVar4 = 0u;\n\tnodeVar5 = 0u;\n\tnodeVar6 = 0u;\n\tnodeVar6 = ( ( 3735928559u + ( nodeVar3 << 2u ) ) + 13u );\n\tnodeVar5 = nodeVar6;\n\tnodeVar4 = nodeVar5;\n\tnodeVar4 = ( nodeVar4 + u32( nodeVar2 ) );\n\tnodeVar5 = ( nodeVar5 + u32( nodeVar1 ) );\n\tnodeVar6 = ( nodeVar6 + u32( nodeVar0 ) );\n\n\treturn mx_bjfinal( nodeVar4, nodeVar5, nodeVar6 );\n\n}\n\nfn mx_select ( b : bool, t : f32, f : f32 ) -> f32 {\n\n\tvar nodeVar0 : f32;\n\tvar nodeVar1 : f32;\n\tvar nodeVar2 : bool;\n\tvar nodeVar3 : f32;\n\n\tnodeVar0 = f;\n\tnodeVar1 = t;\n\tnodeVar2 = b;\n\n\treturn select( nodeVar0, nodeVar1, nodeVar2 );\n\n}\n\nfn mx_negate_if ( val : f32, b : bool ) -> f32 {\n\n\tvar nodeVar0 : bool;\n\tvar nodeVar1 : f32;\n\tvar nodeVar2 : f32;\n\n\tnodeVar0 = b;\n\tnodeVar1 = val;\n\n\treturn select( nodeVar1, ( - nodeVar1 ), nodeVar0 );\n\n}\n\nfn mx_gradient_float_1 ( hash : u32, x : f32, y : f32, z : f32 ) -> f32 {\n\n\tvar nodeVar0 : f32;\n\tvar nodeVar1 : f32;\n\tvar nodeVar2 : f32;\n\tvar nodeVar3 : u32;\n\tvar nodeVar4 : u32;\n\tvar nodeVar5 : f32;\n\tvar nodeVar6 : f32;\n\n\tnodeVar0 = z;\n\tnodeVar1 = y;\n\tnodeVar2 = x;\n\tnodeVar3 = hash;\n\tnodeVar4 = ( nodeVar3 & 15u );\n\tnodeVar5 = mx_select( ( nodeVar4 < 8u ), nodeVar2, nodeVar1 );\n\tnodeVar6 = mx_select( ( nodeVar4 < 4u ), nodeVar1, mx_select( ( ( nodeVar4 == 12u ) || ( nodeVar4 == 14u ) ), nodeVar2, nodeVar0 ) );\n\n\treturn ( mx_negate_if( nodeVar5, bool( ( nodeVar4 & 1u ) ) ) + mx_negate_if( nodeVar6, bool( ( nodeVar4 & 2u ) ) ) );\n\n}\n\nfn mx_floor ( x : f32 ) -> i32 {\n\n\tvar nodeVar0 : f32;\n\n\tnodeVar0 = x;\n\n\treturn i32( floor( nodeVar0 ) );\n\n}\n\nfn mx_fade ( t : f32 ) -> f32 {\n\n\tvar nodeVar0 : f32;\n\n\tnodeVar0 = t;\n\n\treturn ( ( ( nodeVar0 * nodeVar0 ) * nodeVar0 ) * ( ( nodeVar0 * ( ( nodeVar0 * 6.0 ) - 15.0 ) ) + 10.0 ) );\n\n}\n\nfn mx_hash_vec3_1 ( x : i32, y : i32, z : i32 ) -> vec3<u32> {\n\n\tvar nodeVar0 : i32;\n\tvar nodeVar1 : i32;\n\tvar nodeVar2 : i32;\n\tvar nodeVar3 : u32;\n\tvar nodeVar4 : vec3<u32>;\n\n\tnodeVar0 = z;\n\tnodeVar1 = y;\n\tnodeVar2 = x;\n\tnodeVar3 = mx_hash_int_2( nodeVar2, nodeVar1, nodeVar0 );\n\tnodeVar4 = vec3<u32>( 0u, 0u, 0u );\n\tnodeVar4.x = ( nodeVar3 & 255u );\n\tnodeVar4.y = ( ( nodeVar3 >> 8u ) & 255u );\n\tnodeVar4.z = ( ( nodeVar3 >> 16u ) & 255u );\n\n\treturn nodeVar4;\n\n}\n\nfn mx_gradient_vec3_1 ( hash : vec3<u32>, x : f32, y : f32, z : f32 ) -> vec3<f32> {\n\n\tvar nodeVar0 : f32;\n\tvar nodeVar1 : f32;\n\tvar nodeVar2 : f32;\n\tvar nodeVar3 : vec3<u32>;\n\n\tnodeVar0 = z;\n\tnodeVar1 = y;\n\tnodeVar2 = x;\n\tnodeVar3 = hash;\n\n\treturn vec3<f32>( mx_gradient_float_1( nodeVar3.x, nodeVar2, nodeVar1, nodeVar0 ), mx_gradient_float_1( nodeVar3.y, nodeVar2, nodeVar1, nodeVar0 ), mx_gradient_float_1( nodeVar3.z, nodeVar2, nodeVar1, nodeVar0 ) );\n\n}\n\nfn mx_trilerp_1 ( v0 : vec3<f32>, v1 : vec3<f32>, v2 : vec3<f32>, v3 : vec3<f32>, v4 : vec3<f32>, v5 : vec3<f32>, v6 : vec3<f32>, v7 : vec3<f32>, s : f32, t : f32, r : f32 ) -> vec3<f32> {\n\n\tvar nodeVar0 : f32;\n\tvar nodeVar1 : f32;\n\tvar nodeVar2 : f32;\n\tvar nodeVar3 : vec3<f32>;\n\tvar nodeVar4 : vec3<f32>;\n\tvar nodeVar5 : vec3<f32>;\n\tvar nodeVar6 : vec3<f32>;\n\tvar nodeVar7 : vec3<f32>;\n\tvar nodeVar8 : vec3<f32>;\n\tvar nodeVar9 : vec3<f32>;\n\tvar nodeVar10 : vec3<f32>;\n\tvar nodeVar11 : f32;\n\tvar nodeVar12 : f32;\n\tvar nodeVar13 : f32;\n\n\tnodeVar0 = r;\n\tnodeVar1 = t;\n\tnodeVar2 = s;\n\tnodeVar3 = v7;\n\tnodeVar4 = v6;\n\tnodeVar5 = v5;\n\tnodeVar6 = v4;\n\tnodeVar7 = v3;\n\tnodeVar8 = v2;\n\tnodeVar9 = v1;\n\tnodeVar10 = v0;\n\tnodeVar11 = ( 1.0 - nodeVar2 );\n\tnodeVar12 = ( 1.0 - nodeVar1 );\n\tnodeVar13 = ( 1.0 - nodeVar0 );\n\n\treturn ( ( vec3<f32>( nodeVar13 ) * ( ( vec3<f32>( nodeVar12 ) * ( ( nodeVar10 * vec3<f32>( nodeVar11 ) ) + ( nodeVar9 * vec3<f32>( nodeVar2 ) ) ) ) + ( vec3<f32>( nodeVar1 ) * ( ( nodeVar8 * vec3<f32>( nodeVar11 ) ) + ( nodeVar7 * vec3<f32>( nodeVar2 ) ) ) ) ) ) + ( vec3<f32>( nodeVar0 ) * ( ( vec3<f32>( nodeVar12 ) * ( ( nodeVar6 * vec3<f32>( nodeVar11 ) ) + ( nodeVar5 * vec3<f32>( nodeVar2 ) ) ) ) + ( vec3<f32>( nodeVar1 ) * ( ( nodeVar4 * vec3<f32>( nodeVar11 ) ) + ( nodeVar3 * vec3<f32>( nodeVar2 ) ) ) ) ) ) );\n\n}\n\nfn mx_gradient_scale3d_1 ( v : vec3<f32> ) -> vec3<f32> {\n\n\tvar nodeVar0 : vec3<f32>;\n\n\tnodeVar0 = v;\n\n\treturn ( vec3<f32>( 0.982 ) * nodeVar0 );\n\n}\n\nfn mx_perlin_noise_vec3_1 ( p : vec3<f32> ) -> vec3<f32> {\n\n\tvar nodeVar0 : vec3<f32>;\n\tvar nodeVar1 : i32;\n\tvar nodeVar2 : i32;\n\tvar nodeVar3 : i32;\n\tvar nodeVar4 : f32;\n\tvar nodeVar5 : f32;\n\tvar nodeVar6 : f32;\n\tvar nodeVar7 : f32;\n\tvar nodeVar8 : f32;\n\tvar nodeVar9 : f32;\n\tvar nodeVar10 : f32;\n\tvar nodeVar11 : f32;\n\tvar nodeVar12 : f32;\n\tvar nodeVar13 : vec3<f32>;\n\n\tnodeVar0 = p;\n\tnodeVar1 = 0;\n\tnodeVar2 = 0;\n\tnodeVar3 = 0;\n\tnodeVar4 = nodeVar0.x;\n\tnodeVar1 = mx_floor( nodeVar4 );\n\tnodeVar5 = ( nodeVar4 - f32( nodeVar1 ) );\n\tnodeVar6 = nodeVar0.y;\n\tnodeVar2 = mx_floor( nodeVar6 );\n\tnodeVar7 = ( nodeVar6 - f32( nodeVar2 ) );\n\tnodeVar8 = nodeVar0.z;\n\tnodeVar3 = mx_floor( nodeVar8 );\n\tnodeVar9 = ( nodeVar8 - f32( nodeVar3 ) );\n\tnodeVar10 = mx_fade( nodeVar5 );\n\tnodeVar11 = mx_fade( nodeVar7 );\n\tnodeVar12 = mx_fade( nodeVar9 );\n\tnodeVar13 = mx_trilerp_1( mx_gradient_vec3_1( mx_hash_vec3_1( nodeVar1, nodeVar2, nodeVar3 ), nodeVar5, nodeVar7, nodeVar9 ), mx_gradient_vec3_1( mx_hash_vec3_1( ( nodeVar1 + 1 ), nodeVar2, nodeVar3 ), ( nodeVar5 - 1.0 ), nodeVar7, nodeVar9 ), mx_gradient_vec3_1( mx_hash_vec3_1( nodeVar1, ( nodeVar2 + 1 ), nodeVar3 ), nodeVar5, ( nodeVar7 - 1.0 ), nodeVar9 ), mx_gradient_vec3_1( mx_hash_vec3_1( ( nodeVar1 + 1 ), ( nodeVar2 + 1 ), nodeVar3 ), ( nodeVar5 - 1.0 ), ( nodeVar7 - 1.0 ), nodeVar9 ), mx_gradient_vec3_1( mx_hash_vec3_1( nodeVar1, nodeVar2, ( nodeVar3 + 1 ) ), nodeVar5, nodeVar7, ( nodeVar9 - 1.0 ) ), mx_gradient_vec3_1( mx_hash_vec3_1( ( nodeVar1 + 1 ), nodeVar2, ( nodeVar3 + 1 ) ), ( nodeVar5 - 1.0 ), nodeVar7, ( nodeVar9 - 1.0 ) ), mx_gradient_vec3_1( mx_hash_vec3_1( nodeVar1, ( nodeVar2 + 1 ), ( nodeVar3 + 1 ) ), nodeVar5, ( nodeVar7 - 1.0 ), ( nodeVar9 - 1.0 ) ), mx_gradient_vec3_1( mx_hash_vec3_1( ( nodeVar1 + 1 ), ( nodeVar2 + 1 ), ( nodeVar3 + 1 ) ), ( nodeVar5 - 1.0 ), ( nodeVar7 - 1.0 ), ( nodeVar9 - 1.0 ) ), nodeVar10, nodeVar11, nodeVar12 );\n\n\treturn mx_gradient_scale3d_1( nodeVar13 );\n\n}\n\nfn mx_bits_to_01 ( bits : u32 ) -> f32 {\n\n\tvar nodeVar0 : u32;\n\n\tnodeVar0 = bits;\n\n\treturn ( f32( nodeVar0 ) / f32( 4294967295u ) );\n\n}\n\nfn mx_cell_noise_vec3_1 ( p : vec2<f32> ) -> vec3<f32> {\n\n\tvar nodeVar0 : vec2<f32>;\n\tvar nodeVar1 : i32;\n\tvar nodeVar2 : i32;\n\n\tnodeVar0 = p;\n\tnodeVar1 = mx_floor( nodeVar0.x );\n\tnodeVar2 = mx_floor( nodeVar0.y );\n\n\treturn vec3<f32>( mx_bits_to_01( mx_hash_int_2( nodeVar1, nodeVar2, 0 ) ), mx_bits_to_01( mx_hash_int_2( nodeVar1, nodeVar2, 1 ) ), mx_bits_to_01( mx_hash_int_2( nodeVar1, nodeVar2, 2 ) ) );\n\n}\n\nfn mx_worley_distance_0 ( p : vec2<f32>, x : i32, y : i32, xoff : i32, yoff : i32, jitter : f32, metric : i32 ) -> f32 {\n\n\tvar nodeVar0 : i32;\n\tvar nodeVar1 : f32;\n\tvar nodeVar2 : i32;\n\tvar nodeVar3 : i32;\n\tvar nodeVar4 : i32;\n\tvar nodeVar5 : i32;\n\tvar nodeVar6 : vec2<f32>;\n\tvar nodeVar7 : vec3<f32>;\n\tvar nodeVar8 : vec2<f32>;\n\tvar nodeVar9 : vec2<f32>;\n\tvar nodeVar10 : vec2<f32>;\n\n\tnodeVar0 = metric;\n\tnodeVar1 = jitter;\n\tnodeVar2 = yoff;\n\tnodeVar3 = xoff;\n\tnodeVar4 = y;\n\tnodeVar5 = x;\n\tnodeVar6 = p;\n\tnodeVar7 = mx_cell_noise_vec3_1( vec2<f32>( f32( ( nodeVar5 + nodeVar3 ) ), f32( ( nodeVar4 + nodeVar2 ) ) ) );\n\tnodeVar8 = vec2<f32>( nodeVar7.x, nodeVar7.y );\n\tnodeVar8 = ( nodeVar8 - vec2<f32>( 0.5 ) );\n\tnodeVar8 = ( nodeVar8 * vec2<f32>( nodeVar1 ) );\n\tnodeVar8 = ( nodeVar8 + vec2<f32>( 0.5 ) );\n\tnodeVar9 = ( vec2<f32>( f32( nodeVar5 ), f32( nodeVar4 ) ) + nodeVar8 );\n\tnodeVar10 = ( nodeVar9 - nodeVar6 );\n\n\tif ( ( nodeVar0 == 2 ) ) {\n\n\t\treturn ( abs( nodeVar10.x ) + abs( nodeVar10.y ) );\n\n\t}\n\n\n\tif ( ( nodeVar0 == 3 ) ) {\n\n\t\treturn max( abs( nodeVar10.x ), abs( nodeVar10.y ) );\n\n\t}\n\n\n\treturn dot( nodeVar10, nodeVar10 );\n\n}\n\nfn mx_fractal_noise_vec3 ( p : vec3<f32>, octaves : i32, lacunarity : f32, diminish : f32 ) -> vec3<f32> {\n\n\tvar nodeVar0 : f32;\n\tvar nodeVar1 : f32;\n\tvar nodeVar2 : vec3<f32>;\n\tvar nodeVar3 : vec3<f32>;\n\tvar nodeVar4 : f32;\n\tvar nodeVar5 : i32;\n\n\tnodeVar0 = diminish;\n\tnodeVar1 = lacunarity;\n\tnodeVar2 = p;\n\tnodeVar3 = vec3<f32>( 0.0, 0.0, 0.0 );\n\tnodeVar4 = 1.0;\n\tnodeVar5 = octaves;\n\n\tfor ( var i : i32 = 0; i < nodeVar5; i ++ ) {\n\n\t\tnodeVar3 = ( nodeVar3 + ( vec3<f32>( nodeVar4 ) * mx_perlin_noise_vec3_1( nodeVar2 ) ) );\n\t\tnodeVar4 = ( nodeVar4 * nodeVar0 );\n\t\tnodeVar2 = ( nodeVar2 * vec3<f32>( nodeVar1 ) );\n\n\t}\n\n\n\treturn nodeVar3;\n\n}\n\nfn mx_worley_noise_vec3_0 ( p : vec2<f32>, jitter : f32, metric : i32 ) -> vec3<f32> {\n\n\tvar nodeVar0 : i32;\n\tvar nodeVar1 : f32;\n\tvar nodeVar2 : vec2<f32>;\n\tvar nodeVar3 : i32;\n\tvar nodeVar4 : i32;\n\tvar nodeVar5 : f32;\n\tvar nodeVar6 : f32;\n\tvar nodeVar7 : vec2<f32>;\n\tvar nodeVar8 : vec3<f32>;\n\tvar nodeVar9 : f32;\n\n\tnodeVar0 = metric;\n\tnodeVar1 = jitter;\n\tnodeVar2 = p;\n\tnodeVar3 = 0;\n\tnodeVar4 = 0;\n\tnodeVar5 = nodeVar2.x;\n\tnodeVar3 = mx_floor( nodeVar5 );\n\tnodeVar6 = nodeVar2.y;\n\tnodeVar4 = mx_floor( nodeVar6 );\n\tnodeVar7 = vec2<f32>( ( nodeVar5 - f32( nodeVar3 ) ), ( nodeVar6 - f32( nodeVar4 ) ) );\n\tnodeVar8 = vec3<f32>( 1000000.0, 1000000.0, 1000000.0 );\n\n\tfor ( var x : i32 = -1; x <= 1; x ++ ) {\n\n\n\t\tfor ( var y : i32 = -1; y <= 1; y ++ ) {\n\n\t\t\tnodeVar9 = mx_worley_distance_0( nodeVar7, x, y, nodeVar3, nodeVar4, nodeVar1, nodeVar0 );\n\n\t\t\tif ( ( nodeVar9 < nodeVar8.x ) ) {\n\n\t\t\t\tnodeVar8.z = nodeVar8.y;\n\t\t\t\tnodeVar8.y = nodeVar8.x;\n\t\t\t\tnodeVar8.x = nodeVar9;\n\t\t\t\t\n\n\t\t\t} else {\n\n\n\t\t\t\tif ( ( nodeVar9 < nodeVar8.y ) ) {\n\n\t\t\t\t\tnodeVar8.z = nodeVar8.y;\n\t\t\t\t\tnodeVar8.y = nodeVar9;\n\t\t\t\t\t\n\n\t\t\t\t} else {\n\n\n\t\t\t\t\tif ( ( nodeVar9 < nodeVar8.z ) ) {\n\n\t\t\t\t\t\tnodeVar8.z = nodeVar9;\n\t\t\t\t\t\t\n\n\t\t\t\t\t}\n\n\t\t\t\t\t\n\n\t\t\t\t}\n\n\t\t\t\t\n\n\t\t\t}\n\n\n\t\t}\n\n\n\t}\n\n\n\tif ( ( nodeVar0 == 0 ) ) {\n\n\t\tnodeVar8 = sqrt( nodeVar8 );\n\t\t\n\n\t}\n\n\n\treturn nodeVar8;\n\n}\n\n\n\n@fragment\nfn main( @location( 0 ) nodeVarying4 : vec2<f32> ) -> OutputStruct {\n\n\t// flow\n\t// code\n\n\tnodeVar0 = ( nodeVarying4 * vec2<f32>( 6.0 ) );\n\tDiffuseColor = vec4<f32>( ( ( ( ( ( mx_fractal_noise_vec3( vec3<f32>( nodeVar0, 0.0 ), 5, 2.0, 0.55 ) * vec3<f32>( 1.0 ) ) * vec3<f32>( 0.5 ) ) + vec3<f32>( 0.5 ) ) * vec3<f32>( 0.75 ) ) + ( mx_worley_noise_vec3_0( ( nodeVar0 * vec2<f32>( 0.7 ) ), 1.0, 1 ) * vec3<f32>( 0.25 ) ) ), 1.0 );\n\tDiffuseColor.w = ( DiffuseColor.w * object.nodeUniform0 );\n\tDiffuseColor.w = 1.0;\n\tnodeVar1 = max( vec4<f32>( DiffuseColor.xyz, DiffuseColor.w ), vec4<f32>( 0.0 ) );\n\tOutput = nodeVar1;\n\n\t// result\n\n\toutput.color = nodeVar1;\n\n\treturn output;\n\n}\n",
+			"hardwareClipping": false,
+			"key": "main/procedural-card",
+			"observer": {
+				"hasAnimation": false,
+				"hasNode": true
+			},
+			"uniformCalls": [
+				{
+					"name": "nodeUniform0",
+					"nid": 2244,
+					"node": {
+						"k": "owned",
+						"owner": {
+							"k": "materialCache",
+							"property": "opacity",
+							"type": "float"
+						},
+						"path": [
+							"node"
+						],
+						"prime": "reference"
+					},
+					"stage": "fragment",
+					"type": "float"
+				},
+				{
+					"name": "cameraProjectionMatrix",
+					"nid": 1030,
+					"node": {
+						"k": "namedRenderUniform",
+						"name": "cameraProjectionMatrix"
+					},
+					"stage": "vertex",
+					"type": "mat4"
+				},
+				{
+					"name": "cameraViewMatrix",
+					"nid": 1039,
+					"node": {
+						"k": "namedRenderUniform",
+						"name": "cameraViewMatrix"
+					},
+					"stage": "vertex",
+					"type": "mat4"
+				},
+				{
+					"name": "nodeUniform3",
+					"nid": 194,
+					"node": {
+						"k": "owned",
+						"owner": {
+							"k": "tsl",
+							"name": "mediumpModelViewMatrix"
+						},
+						"path": [
+							0,
+							1,
+							0
+						]
+					},
+					"stage": "vertex",
+					"type": "mat4"
+				}
+			],
+			"updateAfterNodes": [],
+			"updateBeforeNodes": [],
+			"updateNodes": [
+				{
+					"k": "namedRenderUniform",
+					"name": "cameraProjectionMatrix"
+				},
+				{
+					"k": "tsl",
+					"name": "renderGroup"
+				},
+				{
+					"k": "namedRenderUniform",
+					"name": "cameraViewMatrix"
+				},
+				{
+					"k": "tsl",
+					"name": "modelWorldMatrix"
+				},
+				{
+					"k": "tsl",
+					"name": "objectGroup"
+				},
+				{
+					"k": "materialCache",
+					"property": "opacity",
+					"type": "float"
+				}
+			],
+			"vertexShader": "// Three.js r185 - Node System\n\n// directives\n\n\n// structs\n\n\n// uniforms\n\nstruct renderStruct {\n\tcameraProjectionMatrix : mat4x4<f32>,\n\tcameraViewMatrix : mat4x4<f32>\n};\n@binding( 0 ) @group( 0 )\nvar<uniform> render : renderStruct;\n\nstruct objectStruct {\n\tnodeUniform0 : f32,\n\tnodeUniform3 : mat4x4<f32>\n};\n@binding( 0 ) @group( 1 )\nvar<uniform> object : objectStruct;\n\n// varyings\n\nstruct VaryingsStruct {\n\t@location( 0 ) nodeVarying4 : vec2<f32>,\n\t@builtin( position ) builtinClipSpace : vec4<f32>\n};\nvar<private> varyings : VaryingsStruct;\n\n// vars\nvar<private> modelViewMatrix : mat4x4<f32>;\nvar<private> VERTEX_nodeVar2 : vec4<f32>;\nvar<private> v_modelViewProjection : vec4<f32>;\nvar<private> v_positionView : vec3<f32>;\nvar<private> positionLocal : vec3<f32>;\nvar<private> VERTEX_v_modelViewProjection : vec4<f32>;\n\n// codes\n\n\n@vertex\nfn main( @location( 0 ) uv : vec2<f32>,\n\t@location( 1 ) position : vec3<f32> ) -> VaryingsStruct {\n\n\t// flow\n\t// code\n\n\tvaryings.nodeVarying4 = uv;\n\tmodelViewMatrix = ( render.cameraViewMatrix * object.nodeUniform3 );\n\tpositionLocal = position;\n\tv_positionView = ( modelViewMatrix * vec4<f32>( positionLocal, 1.0 ) ).xyz;\n\tVERTEX_nodeVar2 = ( render.cameraProjectionMatrix * vec4<f32>( v_positionView, 1.0 ) );\n\tVERTEX_v_modelViewProjection = VERTEX_nodeVar2;\n\n\t// result\n\n\tvaryings.builtinClipSpace = VERTEX_v_modelViewProjection;\n\n\treturn varyings;\n\n}\n"
+		}
+	},
+	"runtime": {
+		"address": 1,
+		"hydration": 1,
+		"id": "three-webgpu-r185-v1",
+		"recipe": 1
+	},
+	"scene": "main",
+	"three": "0.185.1",
+	"threeBlocks": "0.1.0",
+	"version": 2
+}
